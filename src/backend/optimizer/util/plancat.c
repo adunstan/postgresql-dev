@@ -454,6 +454,11 @@ estimate_rel_size(Relation rel, int32 *attr_widths,
 			*pages = 1;
 			*tuples = 1;
 			break;
+		case RELKIND_FOREIGN_TABLE:
+			/* foreign tables has no storage, trust statistics  */
+			*pages = rel->rd_rel->relpages;
+			*tuples = rel->rd_rel->reltuples;
+			break;
 		default:
 			/* else it has no disk storage; probably shouldn't get here? */
 			*pages = 0;
@@ -753,7 +758,8 @@ relation_excluded_by_constraints(PlannerInfo *root,
  *
  * We also support building a "physical" tlist for subqueries, functions,
  * values lists, and CTEs, since the same optimization can occur in
- * SubqueryScan, FunctionScan, ValuesScan, CteScan, and WorkTableScan nodes.
+ * SubqueryScan, FunctionScan, ValuesScan, CteScan, WorkTableScan and
+ * ForeignScan nodes.
  */
 List *
 build_physical_tlist(PlannerInfo *root, RelOptInfo *rel)

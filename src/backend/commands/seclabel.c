@@ -103,6 +103,7 @@ ExecSecLabelStmt(SecLabelStmt *stmt)
 		case OBJECT_SEQUENCE:
 		case OBJECT_TABLE:
 		case OBJECT_VIEW:
+		case OBJECT_FOREIGN_TABLE:
 			if (!pg_class_ownercheck(RelationGetRelid(relation), GetUserId()))
 				aclcheck_error(ACLCHECK_NOT_OWNER, ACL_KIND_CLASS,
 							   RelationGetRelationName(relation));

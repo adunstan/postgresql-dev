@@ -431,6 +431,15 @@ typedef struct WorkTableScan
 	int			wtParam;		/* ID of Param representing work table */
 } WorkTableScan;
 
+/* ----------------
+ *		ForeignScan node
+ * ----------------
+ */
+typedef struct ForeignScan
+{
+	Scan			scan;
+} ForeignScan;
+
 
 /*
  * ==========

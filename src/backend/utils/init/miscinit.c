@@ -30,6 +30,7 @@
 #endif
 
 #include "catalog/pg_authid.h"
+#include "foreign/foreign.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "postmaster/autovacuum.h"
@@ -379,6 +380,7 @@ SetUserIdAndContext(Oid userid, bool sec_def_context)
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("cannot set parameter \"%s\" within security-restricted operation",
 						"role")));
+
 	CurrentUserId = userid;
 	if (sec_def_context)
 		SecurityRestrictionContext |= SECURITY_LOCAL_USERID_CHANGE;

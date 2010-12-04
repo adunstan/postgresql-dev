@@ -15,24 +15,29 @@
 
 #include "access/heapam.h"
 #include "access/reloptions.h"
+#include "access/xact.h"
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_foreign_data_wrapper.h"
 #include "catalog/pg_foreign_server.h"
+#include "catalog/pg_foreign_table.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_user_mapping.h"
 #include "commands/defrem.h"
 #include "foreign/foreign.h"
 #include "miscadmin.h"
+#include "nodes/execnodes.h"
 #include "parser/parse_func.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
+#include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
+#include "utils/tqual.h"
 
 
 /*
@@ -315,16 +320,69 @@ AlterForeignServerOwner(const char *name, Oid newOwnerId)
  * Convert a validator function name passed from the parser to an Oid.
  */
 static Oid
-lookup_fdw_validator_func(List *validator)
+lookup_fdw_validator_func(DefElem *validator)
 {
 	Oid			funcargtypes[2];
 
+	if (validator == NULL || validator->arg == NULL)
+		return InvalidOid;
+
 	funcargtypes[0] = TEXTARRAYOID;
 	funcargtypes[1] = OIDOID;
-	return LookupFuncName(validator, 2, funcargtypes, false);
+	return LookupFuncName((List *) validator->arg, 2, funcargtypes, false);
 	/* return value is ignored, so we don't check the type */
 }
 
+static Oid
+lookup_fdw_handler_func(DefElem *handler)
+{
+	Oid handlerOid;
+
+	if (handler == NULL || handler->arg == NULL)
+		return InvalidOid;
+
+	/* check that handler have correct return type */
+	handlerOid = LookupFuncName((List *) handler->arg, 0, NULL, false);
+	if (get_func_rettype(handlerOid) != FDW_HANDLEROID)
+	{
+		ereport(ERROR,
+			(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+			 errmsg("function %s must return type \"fdw_handler\"",
+				NameListToString((List *) handler->arg))));
+	}
+
+	return handlerOid;
+}
+
+static void
+parse_func_options(List *func_options, DefElem **validator, DefElem **handler)
+{
+	ListCell	   *cell;
+
+	*validator = NULL;
+	*handler = NULL;
+	foreach (cell, func_options)
+	{
+		DefElem    *def = lfirst(cell);
+
+		if (pg_strcasecmp(def->defname, "validator") == 0)
+		{
+			if (*validator)
+				elog(ERROR, "duplicated VALIDATOR");
+			*validator = def;
+		}
+		else if (pg_strcasecmp(def->defname, "handler") == 0)
+		{
+			if (*handler)
+				elog(ERROR, "duplicated HANDLER");
+			*handler = def;
+		}
+		else
+		{
+			elog(ERROR, "invalid option");
+		}
+	}
+}
 
 /*
  * Create a foreign-data wrapper
@@ -337,7 +395,10 @@ CreateForeignDataWrapper(CreateFdwStmt *stmt)
 	bool		nulls[Natts_pg_foreign_data_wrapper];
 	HeapTuple	tuple;
 	Oid			fdwId;
+	DefElem	   *defvalidator;
+	DefElem	   *defhandler;
 	Oid			fdwvalidator;
+	Oid			fdwhandler;
 	Datum		fdwoptions;
 	Oid			ownerId;
 
@@ -373,12 +434,13 @@ CreateForeignDataWrapper(CreateFdwStmt *stmt)
 		DirectFunctionCall1(namein, CStringGetDatum(stmt->fdwname));
 	values[Anum_pg_foreign_data_wrapper_fdwowner - 1] = ObjectIdGetDatum(ownerId);
 
-	if (stmt->validator)
-		fdwvalidator = lookup_fdw_validator_func(stmt->validator);
-	else
-		fdwvalidator = InvalidOid;
+	/* determin which validator to be used (or not used at all) */
+	parse_func_options(stmt->func_options, &defvalidator, &defhandler);
+	fdwvalidator = lookup_fdw_validator_func(defvalidator);
+	fdwhandler = lookup_fdw_handler_func(defhandler);
 
 	values[Anum_pg_foreign_data_wrapper_fdwvalidator - 1] = fdwvalidator;
+	values[Anum_pg_foreign_data_wrapper_fdwhandler - 1] = fdwhandler;
 
 	nulls[Anum_pg_foreign_data_wrapper_fdwacl - 1] = true;
 
@@ -414,6 +476,21 @@ CreateForeignDataWrapper(CreateFdwStmt *stmt)
 		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 	}
 
+	if (fdwhandler != InvalidOid)
+	{
+		ObjectAddress myself;
+		ObjectAddress referenced;
+
+		myself.classId = ForeignDataWrapperRelationId;
+		myself.objectId = fdwId;
+		myself.objectSubId = 0;
+
+		referenced.classId = ProcedureRelationId;
+		referenced.objectId = fdwhandler;
+		referenced.objectSubId = 0;
+		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+	}
+
 	recordDependencyOnOwner(ForeignDataWrapperRelationId, fdwId, ownerId);
 
 	/* Post creation hook for new foreign data wrapper */
@@ -438,7 +515,10 @@ AlterForeignDataWrapper(AlterFdwStmt *stmt)
 	Oid			fdwId;
 	bool		isnull;
 	Datum		datum;
+	DefElem	   *defvalidator;
+	DefElem	   *defhandler;
 	Oid			fdwvalidator;
+	Oid			fdwhandler;
 
 	/* Must be super user */
 	if (!superuser())
@@ -462,9 +542,11 @@ AlterForeignDataWrapper(AlterFdwStmt *stmt)
 	memset(repl_null, false, sizeof(repl_null));
 	memset(repl_repl, false, sizeof(repl_repl));
 
-	if (stmt->change_validator)
+	parse_func_options(stmt->func_options, &defvalidator, &defhandler);
+
+	if (defvalidator)
 	{
-		fdwvalidator = stmt->validator ? lookup_fdw_validator_func(stmt->validator) : InvalidOid;
+		fdwvalidator = lookup_fdw_validator_func(defvalidator);
 		repl_val[Anum_pg_foreign_data_wrapper_fdwvalidator - 1] = ObjectIdGetDatum(fdwvalidator);
 		repl_repl[Anum_pg_foreign_data_wrapper_fdwvalidator - 1] = true;
 
@@ -472,7 +554,7 @@ AlterForeignDataWrapper(AlterFdwStmt *stmt)
 		 * It could be that the options for the FDW, SERVER and USER MAPPING
 		 * are no longer valid with the new validator.	Warn about this.
 		 */
-		if (stmt->validator)
+		if (defvalidator->arg)
 			ereport(WARNING,
 			 (errmsg("changing the foreign-data wrapper validator can cause "
 					 "the options for dependent objects to become invalid")));
@@ -488,6 +570,34 @@ AlterForeignDataWrapper(AlterFdwStmt *stmt)
 								&isnull);
 		Assert(!isnull);
 		fdwvalidator = DatumGetObjectId(datum);
+	}
+
+	if (defhandler)
+	{
+		fdwhandler = lookup_fdw_handler_func(defhandler);
+		repl_val[Anum_pg_foreign_data_wrapper_fdwhandler - 1] = ObjectIdGetDatum(fdwhandler);
+		repl_repl[Anum_pg_foreign_data_wrapper_fdwhandler - 1] = true;
+
+		/*
+		 * It could be that the behavior of accessing foreign table changes
+		 * with the new handler.  Warn about this.
+		 */
+		if (defhandler->arg)
+			ereport(WARNING,
+			 (errmsg("changing the foreign-data wrapper handler would change "
+					 "the behavior of accessing foreign tables")));
+	}
+	else
+	{
+		/*
+		 * Validator is not changed, but we need it for validating options.
+		 */
+		datum = SysCacheGetAttr(FOREIGNDATAWRAPPEROID,
+								tp,
+								Anum_pg_foreign_data_wrapper_fdwhandler,
+								&isnull);
+		Assert(!isnull);
+		fdwhandler = DatumGetObjectId(datum);
 	}
 
 	/*
@@ -1157,4 +1267,269 @@ RemoveUserMappingById(Oid umId)
 	ReleaseSysCache(tp);
 
 	heap_close(rel, RowExclusiveLock);
+}
+
+/*
+ * Create a foreign table
+ * call after DefineRelation().
+ */
+void
+CreateForeignTable(CreateForeignTableStmt *stmt, Oid relid)
+{
+	Relation	ftrel;
+	Datum		ftoptions;
+	Datum		values[Natts_pg_foreign_table];
+	bool		nulls[Natts_pg_foreign_table];
+	HeapTuple	tuple;
+	Oid			ftId;
+	AclResult	aclresult;
+	ObjectAddress myself;
+	ObjectAddress referenced;
+	Oid			ownerId;
+	ForeignDataWrapper *fdw;
+	ForeignServer *server;
+	ListCell   *lc;
+
+	/*
+	 * Advance command counter to ensure the pg_attribute tuple visible; the
+	 * tuple might be updated to add default value or constraints in previous
+	 * step.
+	 */
+	CommandCounterIncrement();
+
+	/*
+	 * For now the owner cannot be specified on create. Use effective user ID.
+	 */
+	ownerId = GetUserId();
+
+	/*
+	 * Check that the foreign server exists and that we have USAGE on it. Also
+	 * get the actual FDW for option validation etc.
+	 */
+	server = GetForeignServerByName(stmt->servername, false);
+	aclresult = pg_foreign_server_aclcheck(server->serverid, ownerId, ACL_USAGE);
+	if (aclresult != ACLCHECK_OK)
+		aclcheck_error(aclresult, ACL_KIND_FOREIGN_SERVER, server->servername);
+
+	fdw = GetForeignDataWrapper(server->fdwid);
+
+	aclresult = pg_foreign_data_wrapper_aclcheck(fdw->fdwid, ownerId, ACL_USAGE);
+	if (aclresult != ACLCHECK_OK)
+		aclcheck_error(aclresult, ACL_KIND_FDW, fdw->fdwname);
+
+	/*
+	 * Insert tuple into pg_foreign_table.
+	 */
+	ftrel = heap_open(ForeignTableRelationId, RowExclusiveLock);
+
+	memset(values, 0, sizeof(values));
+	memset(nulls, false, sizeof(nulls));
+
+	values[Anum_pg_foreign_table_ftrelid - 1] = ObjectIdGetDatum(relid);
+	values[Anum_pg_foreign_table_ftserver - 1] = ObjectIdGetDatum(server->serverid);
+	/* Add table generic options */
+	ftoptions = transformGenericOptions(ForeignTableRelationId,
+										PointerGetDatum(NULL),
+										stmt->options,
+										fdw->fdwvalidator);
+
+	if (PointerIsValid(DatumGetPointer(ftoptions)))
+		values[Anum_pg_foreign_table_ftoptions - 1] = ftoptions;
+	else
+		nulls[Anum_pg_foreign_table_ftoptions - 1] = true;
+
+	tuple = heap_form_tuple(ftrel->rd_att, values, nulls);
+
+	/* pg_foreign_table don't have OID */
+	ftId = simple_heap_insert(ftrel, tuple);
+
+	CatalogUpdateIndexes(ftrel, tuple);
+
+	heap_freetuple(tuple);
+
+	/* Add pg_class dependency on the server */
+	myself.classId = RelationRelationId;
+	myself.objectId = relid;
+	myself.objectSubId = 0;
+
+	referenced.classId = ForeignServerRelationId;
+	referenced.objectId = server->serverid;
+	referenced.objectSubId = 0;
+	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+
+	/* Advance command counter to ensure the pg_foreign_table tuple visible */
+	CommandCounterIncrement();
+
+	/* Set per-column generic options in pg_attribute */
+	foreach (lc, stmt->base.tableElts)
+	{
+		ColumnDef	   *coldef = lfirst(lc);
+
+		AlterColumnGenericOptions(relid, coldef->colname, coldef->genoptions);
+	}
+
+	heap_close(ftrel, NoLock);
+}
+
+/*
+ * Modify generic options of the column which is identified by relid and
+ * colname.
+ */
+void
+AlterColumnGenericOptions(Oid relid, const char *colname, List *options)
+{
+	Relation		rel;			/* the foreign table itself */
+	Relation		attrelation;	/* pg_attribute relation */
+	HeapTuple		tuple;
+	HeapTuple		newtuple;
+	Form_pg_attribute attrtuple;
+	Datum			oldopt;
+	Datum			newopt;
+	bool			isnull;
+	Datum			repl_val[Natts_pg_attribute];
+	bool			repl_null[Natts_pg_attribute];
+	bool			repl_repl[Natts_pg_attribute];
+
+	if (options == NIL)
+		return;
+
+	/*
+	 * Open target relation for only its name. Appropriate lock should be held
+	 * already.
+	 */
+	rel = heap_open(relid, NoLock);
+
+	/* Open pg_attribute anyway, even if it had been opened already. */
+	attrelation = heap_open(AttributeRelationId, RowExclusiveLock);
+
+	tuple = SearchSysCacheAttName(relid, colname);
+	if (!HeapTupleIsValid(tuple))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_COLUMN),
+				 errmsg("column \"%s\" of relation \"%s\" does not exist",
+						colname, RelationGetRelationName(rel))));
+	attrtuple = (Form_pg_attribute) GETSTRUCT(tuple);
+	if (attrtuple->attnum <= 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot alter system column \"%s\"",
+						colname)));
+
+	/* Generate new proposed generic options */
+	oldopt = SysCacheGetAttr(ATTNAME, tuple,
+							 Anum_pg_attribute_attgenoptions, &isnull);
+	newopt = transformGenericOptions(AttributeRelationId,
+									 isnull ? PointerGetDatum(0) : oldopt,
+									 options,
+									 GetFdwValidator(relid));
+
+	/* build new tuple */
+	memset(repl_null, false, sizeof(repl_null));
+	memset(repl_repl, false, sizeof(repl_repl));
+	if (newopt != (Datum) 0)
+		repl_val[Anum_pg_attribute_attgenoptions - 1] = newopt;
+	else
+		repl_null[Anum_pg_attribute_attgenoptions - 1] = true;
+	repl_repl[Anum_pg_attribute_attgenoptions - 1] = true;
+	newtuple = heap_modify_tuple(tuple, RelationGetDescr(attrelation),
+								 repl_val, repl_null, repl_repl);
+	ReleaseSysCache(tuple);
+
+	/* Update system catalog */
+	simple_heap_update(attrelation, &newtuple->t_self, newtuple);
+	CatalogUpdateIndexes(attrelation, newtuple);
+	heap_freetuple(newtuple);
+	heap_close(attrelation, NoLock);
+	heap_close(rel, NoLock);
+}
+
+
+/*
+ * ALTER FOREIGN TABLE <name> OPTIONS (...)
+ */
+void
+ATExecGenericOptions(Relation rel, List *options)
+{
+	Relation			ftrel;
+	ForeignTable	   *table;
+	ForeignServer	   *server;
+	ForeignDataWrapper *fdw;
+	HeapTuple			tuple;
+	bool				isnull;
+	Datum				repl_val[Natts_pg_foreign_table];
+	bool				repl_null[Natts_pg_foreign_table];
+	bool				repl_repl[Natts_pg_foreign_table];
+	Datum				datum;
+
+	if (options == NIL) 
+		return;
+
+	tuple = SearchSysCacheCopy1(FOREIGNTABLEREL, rel->rd_id);
+	if (!HeapTupleIsValid(tuple))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("foreign table \"%s\" does not exist",
+										RelationGetRelationName(rel))));
+
+	table = GetForeignTable(rel->rd_id);
+	server = GetForeignServer(table->serverid);
+	fdw = GetForeignDataWrapper(server->fdwid);
+
+	memset(repl_val, 0, sizeof(repl_val));
+	memset(repl_null, false, sizeof(repl_null));
+	memset(repl_repl, false, sizeof(repl_repl));
+
+	/* Extract the current options */
+	datum = SysCacheGetAttr(FOREIGNTABLEREL,
+							tuple,
+							Anum_pg_foreign_table_ftoptions,
+							&isnull);
+	if (isnull)
+		datum = PointerGetDatum(NULL);
+
+	/* Transform the options */
+	datum = transformGenericOptions(ForeignTableRelationId,
+									datum,
+									options,
+									fdw->fdwvalidator);
+
+	if (PointerIsValid(DatumGetPointer(datum)))
+		repl_val[Anum_pg_foreign_table_ftoptions - 1] = datum;
+	else
+		repl_null[Anum_pg_foreign_table_ftoptions - 1] = true;
+
+	repl_repl[Anum_pg_foreign_table_ftoptions - 1] = true;
+
+	/* Everything looks good - update the tuple */
+
+	ftrel = heap_open(ForeignTableRelationId, RowExclusiveLock);
+
+	tuple = heap_modify_tuple(tuple, RelationGetDescr(ftrel),
+							  repl_val, repl_null, repl_repl);
+
+	simple_heap_update(ftrel, &tuple->t_self, tuple);
+	CatalogUpdateIndexes(ftrel, tuple);
+
+	heap_close(ftrel, RowExclusiveLock);
+
+	heap_freetuple(tuple);
+}
+
+/*
+ * ALTER FOREIGN TABLE <name> ALTER COLUMN colname OPTIONS (...)
+ */
+void
+ATExecColumnGenericOptions(Relation rel, const char *colname, List *options)
+{
+	if (options == NIL) 
+		return;
+
+	/*
+	 * Advance command counter to ensure the pg_attribute tuple visible; the
+	 * tuple might be updated to add default value or constraints in previous
+	 * step.
+	 */
+	CommandCounterIncrement();
+
+	AlterColumnGenericOptions(rel->rd_id, colname, options);
 }

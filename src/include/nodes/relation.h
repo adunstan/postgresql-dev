@@ -745,6 +745,14 @@ typedef struct TidPath
 } TidPath;
 
 /*
+ * ForeignPath represents a scan on a foreign table
+ */
+typedef struct ForeignPath
+{
+	Path		path;
+} ForeignPath;
+
+/*
  * AppendPath represents an Append plan, ie, successive execution of
  * several member plans.
  *

@@ -1238,6 +1238,15 @@ expand_inherited_rtentry(PlannerInfo *root, RangeTblEntry *rte, Index rti)
 		}
 
 		/*
+		 * SELECT FOR UPDATE/SHARE is not allowd to foreign tables because
+		 * they are read-only.
+		 */
+		if (newrelation->rd_rel->relkind == RELKIND_FOREIGN_TABLE &&
+			lockmode != AccessShareLock)
+			ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							errmsg("SELECT FOR UPDATE/SHARE is not allowed with foreign tables")));
+
+		/*
 		 * Build an RTE for the child, and attach to query's rangetable list.
 		 * We copy most fields of the parent's RTE, but replace relation OID,
 		 * and set inh = false.  Also, set requiredPerms to zero since all

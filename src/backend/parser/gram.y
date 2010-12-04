@@ -185,6 +185,7 @@ static RangeVar *makeRangeVarFromAnyName(List *names, int position, core_yyscan_
 		AlterDatabaseStmt AlterDatabaseSetStmt AlterDomainStmt AlterEnumStmt
 		AlterFdwStmt AlterForeignServerStmt AlterGroupStmt
 		AlterObjectSchemaStmt AlterOwnerStmt AlterSeqStmt AlterTableStmt
+		AlterForeignTableStmt
 		AlterCompositeTypeStmt AlterUserStmt AlterUserMappingStmt AlterUserSetStmt
 		AlterRoleStmt AlterRoleSetStmt
 		AlterDefaultPrivilegesStmt DefACLAction
@@ -193,7 +194,8 @@ static RangeVar *makeRangeVarFromAnyName(List *names, int position, core_yyscan_
 		CreateDomainStmt CreateGroupStmt CreateOpClassStmt
 		CreateOpFamilyStmt AlterOpFamilyStmt CreatePLangStmt
 		CreateSchemaStmt CreateSeqStmt CreateStmt CreateTableSpaceStmt
-		CreateFdwStmt CreateForeignServerStmt CreateAssertStmt CreateTrigStmt
+		CreateFdwStmt CreateForeignServerStmt CreateForeignTableStmt
+		CreateAssertStmt CreateTrigStmt
 		CreateUserStmt CreateUserMappingStmt CreateRoleStmt
 		CreatedbStmt DeclareCursorStmt DefineStmt DeleteStmt DiscardStmt DoStmt
 		DropGroupStmt DropOpClassStmt DropOpFamilyStmt DropPLangStmt DropStmt
@@ -219,8 +221,8 @@ static RangeVar *makeRangeVarFromAnyName(List *names, int position, core_yyscan_
 %type <node>	alter_column_default opclass_item opclass_drop alter_using
 %type <ival>	add_drop opt_asc_desc opt_nulls_order
 
-%type <node>	alter_table_cmd alter_type_cmd
-%type <list>	alter_table_cmds alter_type_cmds
+%type <node>	alter_table_cmd alter_type_cmd alter_foreign_table_cmd
+%type <list>	alter_table_cmds alter_type_cmds alter_foreign_table_cmds
 
 %type <dbehavior>	opt_drop_behavior
 
@@ -279,6 +281,7 @@ static RangeVar *makeRangeVarFromAnyName(List *names, int position, core_yyscan_
 %type <list>	stmtblock stmtmulti
 				OptTableElementList TableElementList OptInherit definition
 				OptTypedTableElementList TypedTableElementList
+				OptForeignTableElementList ForeignTableElementList
 				reloptions opt_reloptions
 				OptWith opt_distinct opt_definition func_args func_args_list
 				func_args_with_defaults func_args_with_defaults_list
@@ -302,6 +305,9 @@ static RangeVar *makeRangeVarFromAnyName(List *names, int position, core_yyscan_
 				opt_enum_val_list enum_val_list table_func_column_list
 				create_generic_options alter_generic_options
 				relation_expr_list dostmt_opt_list
+
+%type <list>	opt_func_options func_options
+%type <defelt>	fdw_option
 
 %type <range>	OptTempTableName
 %type <into>	into_clause create_as_target
@@ -350,7 +356,11 @@ static RangeVar *makeRangeVarFromAnyName(List *names, int position, core_yyscan_
 %type <vsetstmt> set_rest SetResetClause
 
 %type <node>	TableElement TypedTableElement ConstraintElem TableFuncElement
+				ForeignTableElement ForeignConstraintElem
+%type <node>	CheckConstraintElem UniqueConstraintElem PrimaryKeyConstraintElem
+				ExcludeConstraintElem ForeignKeyConstraintElem
 %type <node>	columnDef columnOptions
+				foreignColumnDef
 %type <defelt>	def_elem reloption_elem old_aggr_elem
 %type <node>	def_arg columnElem where_clause where_or_current_clause
 				a_expr b_expr c_expr func_expr AexprConst indirection_el
@@ -410,10 +420,15 @@ static RangeVar *makeRangeVarFromAnyName(List *names, int position, core_yyscan_
 %type <keyword> unreserved_keyword type_func_name_keyword
 %type <keyword> col_name_keyword reserved_keyword
 
-%type <node>	TableConstraint TableLikeClause
+%type <node>	TableConstraint TableLikeClause ForeignTableLikeClause
+				ForeignTableConstraint
 %type <ival>	TableLikeOptionList TableLikeOption
-%type <list>	ColQualList
+%type <ival>	ForeignTableLikeOptionList ForeignTableLikeOption
+%type <list>	ColQualList ForeignColQualList
 %type <node>	ColConstraint ColConstraintElem ConstraintAttr
+				ColNotNullConstraintElem ColNullConstraintElem
+				ColCheckConstraintElem
+				ForeignColConstraint ForeignColConstraintElem
 %type <ival>	key_actions key_delete key_match key_update key_action
 %type <ival>	ConstraintAttributeSpec ConstraintDeferrabilitySpec
 				ConstraintTimeSpec
@@ -655,6 +670,7 @@ stmt :
 			| AlterEnumStmt
 			| AlterFdwStmt
 			| AlterForeignServerStmt
+			| AlterForeignTableStmt
 			| AlterFunctionStmt
 			| AlterGroupStmt
 			| AlterObjectSchemaStmt
@@ -683,6 +699,7 @@ stmt :
 			| CreateDomainStmt
 			| CreateFdwStmt
 			| CreateForeignServerStmt
+			| CreateForeignTableStmt
 			| CreateFunctionStmt
 			| CreateGroupStmt
 			| CreateOpClassStmt
@@ -2455,20 +2472,8 @@ ColConstraint:
  * or be part of a_expr NOT LIKE or similar constructs).
  */
 ColConstraintElem:
-			NOT NULL_P
-				{
-					Constraint *n = makeNode(Constraint);
-					n->contype = CONSTR_NOTNULL;
-					n->location = @1;
-					$$ = (Node *)n;
-				}
-			| NULL_P
-				{
-					Constraint *n = makeNode(Constraint);
-					n->contype = CONSTR_NULL;
-					n->location = @1;
-					$$ = (Node *)n;
-				}
+			ColNotNullConstraintElem				{ $$ = $1; }
+			| ColNullConstraintElem					{ $$ = $1; }
 			| UNIQUE opt_definition OptConsTableSpace
 				{
 					Constraint *n = makeNode(Constraint);
@@ -2489,15 +2494,7 @@ ColConstraintElem:
 					n->indexspace = $4;
 					$$ = (Node *)n;
 				}
-			| CHECK '(' a_expr ')'
-				{
-					Constraint *n = makeNode(Constraint);
-					n->contype = CONSTR_CHECK;
-					n->location = @1;
-					n->raw_expr = $3;
-					n->cooked_expr = NULL;
-					$$ = (Node *)n;
-				}
+			| ColCheckConstraintElem				{ $$ = $1; }
 			| DEFAULT b_expr
 				{
 					Constraint *n = makeNode(Constraint);
@@ -2519,6 +2516,35 @@ ColConstraintElem:
 					n->fk_upd_action	= (char) ($5 >> 8);
 					n->fk_del_action	= (char) ($5 & 0xFF);
 					n->skip_validation  = FALSE;
+					$$ = (Node *)n;
+				}
+		;
+
+ColNotNullConstraintElem: NOT NULL_P
+				{
+					Constraint *n = makeNode(Constraint);
+					n->contype = CONSTR_NOTNULL;
+					n->location = @1;
+					$$ = (Node *)n;
+				}
+		;
+
+ColNullConstraintElem: NULL_P
+				{
+					Constraint *n = makeNode(Constraint);
+					n->contype = CONSTR_NULL;
+					n->location = @1;
+					$$ = (Node *)n;
+				}
+		;
+
+ColCheckConstraintElem: CHECK '(' a_expr ')'
+				{
+					Constraint *n = makeNode(Constraint);
+					n->contype = CONSTR_CHECK;
+					n->location = @1;
+					n->raw_expr = $3;
+					n->cooked_expr = NULL;
 					$$ = (Node *)n;
 				}
 		;
@@ -2600,6 +2626,31 @@ TableLikeOption:
 				| ALL				{ $$ = CREATE_TABLE_LIKE_ALL; }
 		;
 
+ForeignTableLikeClause:
+			LIKE qualified_name ForeignTableLikeOptionList
+				{
+					InhRelation *n = makeNode(InhRelation);
+					n->relation = $2;
+					n->options = $3;
+					$$ = (Node *)n;
+				}
+		;
+
+ForeignTableLikeOptionList:
+			ForeignTableLikeOptionList INCLUDING ForeignTableLikeOption
+												{ $$ = $1 | $3; }
+			| ForeignTableLikeOptionList EXCLUDING ForeignTableLikeOption
+												{ $$ = $1 & ~$3; }
+			| /* EMPTY */						{ $$ = 0; }
+		;
+
+ForeignTableLikeOption:
+			DEFAULTS			{ $$ = CREATE_TABLE_LIKE_DEFAULTS; }
+			| CONSTRAINTS		{ $$ = CREATE_TABLE_LIKE_CONSTRAINTS; }
+			| COMMENTS			{ $$ = CREATE_TABLE_LIKE_COMMENTS; }
+			| ALL				{ $$ = CREATE_TABLE_LIKE_FOREIGN_ALL; }
+		;
+
 
 /* ConstraintElem specifies constraint syntax which is not embedded into
  *	a column definition. ColConstraintElem specifies the embedded form.
@@ -2617,7 +2668,32 @@ TableConstraint:
 			| ConstraintElem						{ $$ = $1; }
 		;
 
+ForeignTableConstraint:
+			CONSTRAINT name ForeignConstraintElem
+				{
+					Constraint *n = (Constraint *) $3;
+					Assert(IsA(n, Constraint));
+					n->conname = $2;
+					n->location = @1;
+					$$ = (Node *) n;
+				}
+			| ForeignConstraintElem					{ $$ = $1; }
+		;
+
+
 ConstraintElem:
+			CheckConstraintElem						{ $$ = $1; }
+			| UniqueConstraintElem					{ $$ = $1; }
+			| PrimaryKeyConstraintElem				{ $$ = $1; }
+			| ExcludeConstraintElem					{ $$ = $1; }
+			| ForeignKeyConstraintElem				{ $$ = $1; }
+	;
+
+ForeignConstraintElem:
+			CheckConstraintElem						{ $$ = $1; }
+	;
+
+CheckConstraintElem:
 			CHECK '(' a_expr ')' ConstraintAttributeSpec
 				{
 					Constraint *n = makeNode(Constraint);
@@ -2632,7 +2708,10 @@ ConstraintElem:
 								 parser_errposition(@5)));
 					$$ = (Node *)n;
 				}
-			| UNIQUE '(' columnList ')' opt_definition OptConsTableSpace
+		;
+
+UniqueConstraintElem:
+			UNIQUE '(' columnList ')' opt_definition OptConsTableSpace
 				ConstraintAttributeSpec
 				{
 					Constraint *n = makeNode(Constraint);
@@ -2645,7 +2724,10 @@ ConstraintElem:
 					n->initdeferred = ($7 & 2) != 0;
 					$$ = (Node *)n;
 				}
-			| PRIMARY KEY '(' columnList ')' opt_definition OptConsTableSpace
+		;
+
+PrimaryKeyConstraintElem:
+			PRIMARY KEY '(' columnList ')' opt_definition OptConsTableSpace
 				ConstraintAttributeSpec
 				{
 					Constraint *n = makeNode(Constraint);
@@ -2658,7 +2740,10 @@ ConstraintElem:
 					n->initdeferred = ($8 & 2) != 0;
 					$$ = (Node *)n;
 				}
-			| EXCLUDE access_method_clause '(' ExclusionConstraintList ')'
+		;
+
+ExcludeConstraintElem:
+			EXCLUDE access_method_clause '(' ExclusionConstraintList ')'
 				opt_definition OptConsTableSpace ExclusionWhereClause
 				ConstraintAttributeSpec
 				{
@@ -2674,7 +2759,9 @@ ConstraintElem:
 					n->initdeferred		= ($9 & 2) != 0;
 					$$ = (Node *)n;
 				}
-			| FOREIGN KEY '(' columnList ')' REFERENCES qualified_name
+		;
+ForeignKeyConstraintElem:
+			FOREIGN KEY '(' columnList ')' REFERENCES qualified_name
 				opt_column_list key_match key_actions ConstraintAttributeSpec
 				{
 					Constraint *n = makeNode(Constraint);
@@ -3136,14 +3223,31 @@ DropTableSpaceStmt: DROP TABLESPACE name
  *
  *****************************************************************************/
 
-CreateFdwStmt: CREATE FOREIGN DATA_P WRAPPER name opt_validator create_generic_options
+CreateFdwStmt: CREATE FOREIGN DATA_P WRAPPER name opt_func_options create_generic_options
 				{
 					CreateFdwStmt *n = makeNode(CreateFdwStmt);
 					n->fdwname = $5;
-					n->validator = $6;
+					n->func_options = $6;
 					n->options = $7;
 					$$ = (Node *) n;
 				}
+		;
+
+fdw_option:
+			VALIDATOR handler_name				{ $$ = makeDefElem("validator", (Node *)$2); }
+			| NO VALIDATOR						{ $$ = makeDefElem("validator", NULL); }
+			| HANDLER handler_name				{ $$ = makeDefElem("handler", (Node *)$2); }
+			| NO HANDLER						{ $$ = makeDefElem("handler", NULL); }
+		;
+
+func_options:
+			fdw_option							{ $$ = list_make1($1); }
+			| func_options fdw_option			{ $$ = lappend($1, $2); }
+		;
+
+opt_func_options:
+			func_options						{ $$ = $1; }
+			| /*EMPTY*/							{ $$ = NIL; }
 		;
 
 /*****************************************************************************
@@ -3178,28 +3282,20 @@ DropFdwStmt: DROP FOREIGN DATA_P WRAPPER name opt_drop_behavior
  *
  ****************************************************************************/
 
-AlterFdwStmt: ALTER FOREIGN DATA_P WRAPPER name validator_clause alter_generic_options
+AlterFdwStmt: ALTER FOREIGN DATA_P WRAPPER name opt_func_options alter_generic_options
 				{
 					AlterFdwStmt *n = makeNode(AlterFdwStmt);
 					n->fdwname = $5;
-					n->validator = $6;
-					n->change_validator = true;
+					n->func_options = $6;
 					n->options = $7;
 					$$ = (Node *) n;
 				}
-			| ALTER FOREIGN DATA_P WRAPPER name validator_clause
+			| ALTER FOREIGN DATA_P WRAPPER name func_options
 				{
 					AlterFdwStmt *n = makeNode(AlterFdwStmt);
 					n->fdwname = $5;
-					n->validator = $6;
-					n->change_validator = true;
-					$$ = (Node *) n;
-				}
-			| ALTER FOREIGN DATA_P WRAPPER name alter_generic_options
-				{
-					AlterFdwStmt *n = makeNode(AlterFdwStmt);
-					n->fdwname = $5;
-					n->options = $6;
+					n->func_options = $6;
+					n->options = NIL;
 					$$ = (Node *) n;
 				}
 		;
@@ -3364,6 +3460,305 @@ AlterForeignServerStmt: ALTER SERVER name foreign_server_version alter_generic_o
 					AlterForeignServerStmt *n = makeNode(AlterForeignServerStmt);
 					n->servername = $3;
 					n->options = $4;
+					$$ = (Node *) n;
+				}
+		;
+
+/*****************************************************************************
+ *
+ * 		QUERY:
+ *             CREATE FORIGN TABLE relname (...) SERVER name (...)
+ *
+ *****************************************************************************/
+
+CreateForeignTableStmt:
+		CREATE FOREIGN TABLE qualified_name
+			OptForeignTableElementList OptInherit
+			SERVER name create_generic_options
+				{
+					CreateForeignTableStmt *n = makeNode(CreateForeignTableStmt);
+					$4->istemp = false;
+					n->base.relation = $4;
+					n->base.tableElts = $5;
+					n->base.inhRelations = $6;
+					/* FDW-specific data */
+					n->servername = $8;
+					n->options = $9;
+					$$ = (Node *) n;
+				}
+		;
+
+OptForeignTableElementList:
+			'(' ForeignTableElementList ')'			{ $$ = $2; }
+			| '(' ')'								{ $$ = NIL; }
+			| /*EMPTY*/
+				{
+					/* TODO: import definitions from foreign server in this case. */
+					$$ = NIL;
+				}
+		;
+
+ForeignTableElementList:
+			ForeignTableElement
+				{
+					$$ = list_make1($1);
+				}
+			| ForeignTableElementList ',' ForeignTableElement
+				{
+					$$ = lappend($1, $3);
+				}
+		;
+
+ForeignTableElement:
+			foreignColumnDef					{ $$ = $1; }
+			| ForeignTableLikeClause			{ $$ = $1; }
+			| ForeignTableConstraint			{ $$ = $1; }
+		;
+
+foreignColumnDef:	ColId Typename create_generic_options ForeignColQualList
+				{
+					ColumnDef *n = makeNode(ColumnDef);
+					n->colname = $1;
+					n->typeName = $2;
+					n->constraints = $4;
+					n->genoptions = $3;
+					n->is_local = true;
+					$$ = (Node *)n;
+				}
+		;
+
+ForeignColQualList:
+			ForeignColQualList ForeignColConstraint	{ $$ = lappend($1, $2); }
+			| /*EMPTY*/								{ $$ = NIL; }
+		;
+
+ForeignColConstraint:
+			CONSTRAINT name ForeignColConstraintElem
+				{
+					Constraint *n = (Constraint *) $3;
+					Assert(IsA(n, Constraint));
+					n->conname = $2;
+					n->location = @1;
+					$$ = (Node *) n;
+				}
+			| ForeignColConstraintElem				{ $$ = $1; }
+			| DEFAULT b_expr
+				{
+					Constraint *n = makeNode(Constraint);
+					n->contype = CONSTR_DEFAULT;
+					n->location = @1;
+					n->raw_expr = $2;
+					n->cooked_expr = NULL;
+					$$ = (Node *)n;
+				}
+		;
+
+ForeignColConstraintElem:
+			ColNotNullConstraintElem				{ $$ = $1; }
+			| ColNullConstraintElem					{ $$ = $1; }
+			| ColCheckConstraintElem				{ $$ = $1; }
+		;
+
+/*****************************************************************************
+ *
+ * 		QUERY:
+ *             ALTER FORIGN TABLE relname ADD [COLUMN] column-definition;
+ *             ALTER FORIGN TABLE relname ALTERR [COLUMN] name OPTIONS (...);
+ *             ALTER FORIGN TABLE relname DROP [COLUMN] name [CASCADE];
+ *             ALTER FORIGN TABLE relname OPTIONS (...);
+ *
+ *****************************************************************************/
+AlterForeignTableStmt:
+			ALTER FOREIGN TABLE relation_expr alter_foreign_table_cmds
+				{
+					AlterTableStmt *n = makeNode(AlterTableStmt);
+					n->relation = $4;
+					n->cmds = $5;
+					n->relkind = OBJECT_FOREIGN_TABLE;
+					$$ = (Node *)n;
+				}
+		;
+
+alter_foreign_table_cmds:
+			alter_foreign_table_cmd					{ $$ = list_make1($1); }
+			| alter_foreign_table_cmds ',' alter_foreign_table_cmd
+													{ $$ = lappend($1, $3); }
+		;
+
+alter_foreign_table_cmd:
+			/* ALTER FOREIGN TABLE <name> ADD <coldef> */
+			ADD_P columnDef
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_AddColumn;
+					n->def = $2;
+					$$ = (Node *)n;
+				}
+			/* ALTER FOREIGN TABLE <name> ADD COLUMN <coldef> */
+			| ADD_P COLUMN columnDef
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_AddColumn;
+					n->def = $3;
+					$$ = (Node *)n;
+				}
+			/* ALTER FOREIGN TABLE <name> ALTER [COLUMN] <colname> {SET DEFAULT <expr>|DROP DEFAULT} */
+			| ALTER opt_column ColId alter_column_default
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_ColumnDefault;
+					n->name = $3;
+					n->def = $4;
+					$$ = (Node *)n;
+				}
+			/* ALTER FOREIGN TABLE <name> ALTER [COLUMN] <colname> DROP NOT NULL */
+			| ALTER opt_column ColId DROP NOT NULL_P
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_DropNotNull;
+					n->name = $3;
+					$$ = (Node *)n;
+				}
+			/* ALTER FOREIGN TABLE <name> ALTER [COLUMN] <colname> SET NOT NULL */
+			| ALTER opt_column ColId SET NOT NULL_P
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_SetNotNull;
+					n->name = $3;
+					$$ = (Node *)n;
+				}
+			/* ALTER FOREIGN TABLE <name> DROP [COLUMN] IF EXISTS <colname> [RESTRICT|CASCADE] */
+			| DROP opt_column IF_P EXISTS ColId opt_drop_behavior
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_DropColumn;
+					n->name = $5;
+					n->behavior = $6;
+					n->missing_ok = TRUE;
+					$$ = (Node *)n;
+				}
+			/* ALTER FOREIGN TABLE <name> DROP [COLUMN] <colname> [RESTRICT|CASCADE] */
+			| DROP opt_column ColId opt_drop_behavior
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_DropColumn;
+					n->name = $3;
+					n->behavior = $4;
+					n->missing_ok = FALSE;
+					$$ = (Node *)n;
+				}
+			/*
+			 * ALTER FOREIGN TABLE <name> ALTER [COLUMN] <colname> [SET DATA] TYPE <typename>
+			 */
+			| ALTER opt_column ColId opt_set_data TYPE_P Typename
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_AlterColumnType;
+					n->name = $3;
+					n->def = (Node *) $6;
+					$$ = (Node *)n;
+				}
+			/*
+			 * ALTER FOREIGN TABLE <name> ALTER [COLUMN] <colname> OPTIONS (...)
+			 */
+			| ALTER opt_column ColId alter_generic_options
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_ColumnGenericOptions;
+					n->name = $3;
+					n->def = (Node *) $4;
+					$$ = (Node *)n;
+				}
+			/* ALTER FOREIGN TABLE <name> ADD CONSTRAINT ... */
+			| ADD_P ForeignTableConstraint
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_AddConstraint;
+					n->def = $2;
+					$$ = (Node *)n;
+				}
+			/* ALTER FOREIGN TABLE <name> DROP CONSTRAINT IF EXISTS <name> [RESTRICT|CASCADE] */
+			| DROP CONSTRAINT IF_P EXISTS name opt_drop_behavior
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_DropConstraint;
+					n->name = $5;
+					n->behavior = $6;
+					n->missing_ok = TRUE;
+					$$ = (Node *)n;
+				}
+			/* ALTER FOREIGN TABLE <name> DROP CONSTRAINT <name> [RESTRICT|CASCADE] */
+			| DROP CONSTRAINT name opt_drop_behavior
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_DropConstraint;
+					n->name = $3;
+					n->behavior = $4;
+					n->missing_ok = FALSE;
+					$$ = (Node *)n;
+				}
+			/* ALTER FOREIGN TABLE <name> ENABLE RULE <rule> */
+			| ENABLE_P RULE name
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_EnableRule;
+					n->name = $3;
+					$$ = (Node *)n;
+				}
+			/* ALTER FOREIGN TABLE <name> ENABLE ALWAYS RULE <rule> */
+			| ENABLE_P ALWAYS RULE name
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_EnableAlwaysRule;
+					n->name = $4;
+					$$ = (Node *)n;
+				}
+			/* ALTER FOREIGN TABLE <name> ENABLE REPLICA RULE <rule> */
+			| ENABLE_P REPLICA RULE name
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_EnableReplicaRule;
+					n->name = $4;
+					$$ = (Node *)n;
+				}
+			/* ALTER FOREIGN TABLE <name> DISABLE RULE <rule> */
+			| DISABLE_P RULE name
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_DisableRule;
+					n->name = $3;
+					$$ = (Node *)n;
+				}
+			/* ALTER FOREIGN TABLE <name> INHERIT <parent> */
+			| INHERIT qualified_name
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_AddInherit;
+					n->def = (Node *) $2;
+					$$ = (Node *)n;
+				}
+			/* ALTER FOREIGN TABLE <name> NO INHERIT <parent> */
+			| NO INHERIT qualified_name
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_DropInherit;
+					n->def = (Node *) $3;
+					$$ = (Node *)n;
+				}
+			/* ALTER FOREIGN TABLE <name> OWNER TO RoleId */
+			| OWNER TO RoleId
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_ChangeOwner;
+					n->name = $3;
+					$$ = (Node *)n;
+				}
+			/* ALTER FOREIGN TABLE <name> OPTIONS (...) */
+			| alter_generic_options
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_GenericOptions;
+					n->def = (Node *)$1;
 					$$ = (Node *) n;
 				}
 		;
@@ -4184,6 +4579,7 @@ drop_type:	TABLE									{ $$ = OBJECT_TABLE; }
 			| TEXT_P SEARCH DICTIONARY				{ $$ = OBJECT_TSDICTIONARY; }
 			| TEXT_P SEARCH TEMPLATE				{ $$ = OBJECT_TSTEMPLATE; }
 			| TEXT_P SEARCH CONFIGURATION			{ $$ = OBJECT_TSCONFIGURATION; }
+			| FOREIGN TABLE							{ $$ = OBJECT_FOREIGN_TABLE; }
 		;
 
 any_name_list:
@@ -4235,8 +4631,8 @@ opt_restart_seqs:
  *				   CONVERSION | LANGUAGE | OPERATOR CLASS | LARGE OBJECT |
  *				   CAST | COLUMN | SCHEMA | TABLESPACE | ROLE |
  *				   TEXT SEARCH PARSER | TEXT SEARCH DICTIONARY |
- *				   TEXT SEARCH TEMPLATE |
- *				   TEXT SEARCH CONFIGURATION ] <objname> |
+ *				   TEXT SEARCH TEMPLATE | TEXT SEARCH CONFIGURATION |
+ *				   FOREIGN TABLE ] <objname> |
  *				 AGGREGATE <aggname> (arg1, ...) |
  *				 FUNCTION <funcname> (arg1, arg2, ...) |
  *				 OPERATOR <op> (leftoperand_typ, rightoperand_typ) |
@@ -4413,6 +4809,7 @@ comment_type:
 			| CONVERSION_P						{ $$ = OBJECT_CONVERSION; }
 			| TABLESPACE						{ $$ = OBJECT_TABLESPACE; }
 			| ROLE								{ $$ = OBJECT_ROLE; }
+			| FOREIGN TABLE						{ $$ = OBJECT_FOREIGN_TABLE; }
 		;
 
 comment_text:
@@ -4826,6 +5223,14 @@ privilege_target:
 					PrivTarget *n = (PrivTarget *) palloc(sizeof(PrivTarget));
 					n->targtype = ACL_TARGET_OBJECT;
 					n->objtype = ACL_OBJECT_FOREIGN_SERVER;
+					n->objs = $3;
+					$$ = n;
+				}
+			| FOREIGN TABLE qualified_name_list
+				{
+					PrivTarget *n = (PrivTarget *) palloc(sizeof(PrivTarget));
+					n->targtype = ACL_TARGET_OBJECT;
+					n->objtype = ACL_OBJECT_FOREIGN_TABLE;
 					n->objs = $3;
 					$$ = n;
 				}
@@ -5915,6 +6320,15 @@ RenameStmt: ALTER AGGREGATE func_name aggr_args RENAME TO name
 					n->newname = $6;
 					$$ = (Node *)n;
 				}
+			| ALTER FOREIGN TABLE relation_expr RENAME TO name
+				{
+					RenameStmt *n = makeNode(RenameStmt);
+					n->renameType = OBJECT_FOREIGN_TABLE;
+					n->relation = $4;
+					n->subname = NULL;
+					n->newname = $7;
+					$$ = (Node *)n;
+				}
 			| ALTER TABLE relation_expr RENAME opt_column name TO name
 				{
 					RenameStmt *n = makeNode(RenameStmt);
@@ -5922,6 +6336,15 @@ RenameStmt: ALTER AGGREGATE func_name aggr_args RENAME TO name
 					n->relation = $3;
 					n->subname = $6;
 					n->newname = $8;
+					$$ = (Node *)n;
+				}
+			| ALTER FOREIGN TABLE relation_expr RENAME opt_column name TO name
+				{
+					RenameStmt *n = makeNode(RenameStmt);
+					n->renameType = OBJECT_COLUMN;
+					n->relation = $4;
+					n->subname = $7;
+					n->newname = $9;
 					$$ = (Node *)n;
 				}
 			| ALTER TRIGGER name ON qualified_name RENAME TO name
@@ -6157,6 +6580,14 @@ AlterObjectSchemaStmt:
 					n->objectType = OBJECT_VIEW;
 					n->relation = $3;
 					n->newschema = $6;
+					$$ = (Node *)n;
+				}
+			| ALTER FOREIGN TABLE relation_expr SET SCHEMA name
+				{
+					AlterObjectSchemaStmt *n = makeNode(AlterObjectSchemaStmt);
+					n->objectType = OBJECT_FOREIGN_TABLE;
+					n->relation = $4;
+					n->newschema = $7;
 					$$ = (Node *)n;
 				}
 			| ALTER TYPE_P any_name SET SCHEMA name

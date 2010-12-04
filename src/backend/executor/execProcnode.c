@@ -86,6 +86,7 @@
 #include "executor/nodeBitmapOr.h"
 #include "executor/nodeCtescan.h"
 #include "executor/nodeFunctionscan.h"
+#include "executor/nodeForeignscan.h"
 #include "executor/nodeGroup.h"
 #include "executor/nodeHash.h"
 #include "executor/nodeHashjoin.h"
@@ -229,6 +230,11 @@ ExecInitNode(Plan *node, EState *estate, int eflags)
 
 		case T_WorkTableScan:
 			result = (PlanState *) ExecInitWorkTableScan((WorkTableScan *) node,
+														 estate, eflags);
+			break;
+
+		case T_ForeignScan:
+			result = (PlanState *) ExecInitForeignScan((ForeignScan *) node,
 														 estate, eflags);
 			break;
 
@@ -420,6 +426,10 @@ ExecProcNode(PlanState *node)
 
 		case T_WorkTableScanState:
 			result = ExecWorkTableScan((WorkTableScanState *) node);
+			break;
+
+		case T_ForeignScanState:
+			result = ExecForeignScan((ForeignScanState *) node);
 			break;
 
 			/*
@@ -648,6 +658,10 @@ ExecEndNode(PlanState *node)
 
 		case T_WorkTableScanState:
 			ExecEndWorkTableScan((WorkTableScanState *) node);
+			break;
+
+		case T_ForeignScanState:
+			ExecEndForeignScan((ForeignScanState *) node);
 			break;
 
 			/*

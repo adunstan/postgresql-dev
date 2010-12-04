@@ -777,6 +777,7 @@ extractRelOptions(HeapTuple tuple, TupleDesc tupdesc, Oid amoptions)
 		case RELKIND_RELATION:
 		case RELKIND_TOASTVALUE:
 		case RELKIND_UNCATALOGED:
+		case RELKIND_FOREIGN_TABLE:
 			options = heap_reloptions(classForm->relkind, datum, false);
 			break;
 		case RELKIND_INDEX:
@@ -1173,6 +1174,12 @@ heap_reloptions(char relkind, Datum reloptions, bool validate)
 			return (bytea *) rdopts;
 		case RELKIND_RELATION:
 			return default_reloptions(reloptions, validate, RELOPT_KIND_HEAP);
+		case RELKIND_FOREIGN_TABLE:
+			if (validate && PointerIsValid(DatumGetPointer(reloptions)))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("foreign table does not support storage options")));
+			return NULL;
 		default:
 			/* sequences, composite types and views are not supported */
 			return NULL;

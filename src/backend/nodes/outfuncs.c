@@ -533,6 +533,14 @@ _outWorkTableScan(StringInfo str, WorkTableScan *node)
 }
 
 static void
+_outForeignScan(StringInfo str, ForeignScan *node)
+{
+	WRITE_NODE_TYPE("FOREIGNSCAN");
+
+	_outScanInfo(str, (Scan *) node);
+}
+
+static void
 _outJoin(StringInfo str, Join *node)
 {
 	WRITE_NODE_TYPE("JOIN");
@@ -1479,6 +1487,14 @@ _outTidPath(StringInfo str, TidPath *node)
 }
 
 static void
+_outForeignPath(StringInfo str, ForeignPath *node)
+{
+	WRITE_NODE_TYPE("FOREIGNPATH");
+
+	_outPathInfo(str, (Path *) node);
+}
+
+static void
 _outAppendPath(StringInfo str, AppendPath *node)
 {
 	WRITE_NODE_TYPE("APPENDPATH");
@@ -1991,6 +2007,7 @@ _outColumnDef(StringInfo str, ColumnDef *node)
 	WRITE_NODE_FIELD(raw_default);
 	WRITE_NODE_FIELD(cooked_default);
 	WRITE_NODE_FIELD(constraints);
+	WRITE_NODE_FIELD(genoptions);
 }
 
 static void
@@ -2606,6 +2623,9 @@ _outNode(StringInfo str, void *obj)
 			case T_WorkTableScan:
 				_outWorkTableScan(str, obj);
 				break;
+			case T_ForeignScan:
+				_outForeignScan(str, obj);
+				break;
 			case T_Join:
 				_outJoin(str, obj);
 				break;
@@ -2807,6 +2827,9 @@ _outNode(StringInfo str, void *obj)
 				break;
 			case T_TidPath:
 				_outTidPath(str, obj);
+				break;
+			case T_ForeignPath:
+				_outForeignPath(str, obj);
 				break;
 			case T_AppendPath:
 				_outAppendPath(str, obj);

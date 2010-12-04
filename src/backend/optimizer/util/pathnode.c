@@ -1420,6 +1420,25 @@ create_worktablescan_path(PlannerInfo *root, RelOptInfo *rel)
 }
 
 /*
+ * create_foreignscan_path
+ *	  Creates a path corresponding to a scan of a foreign table,
+ *	  returning the pathnode.
+ */
+Path *
+create_foreignscan_path(PlannerInfo *root, RelOptInfo *rel)
+{
+	ForeignPath	   *pathnode = makeNode(ForeignPath);
+
+	pathnode->path.pathtype = T_ForeignScan;
+	pathnode->path.parent = rel;
+	pathnode->path.pathkeys = NIL;	/* result is always unordered */
+
+	cost_foreignscan(pathnode, root, rel);
+
+	return (Path *) pathnode;
+}
+
+/*
  * create_nestloop_path
  *	  Creates a pathnode corresponding to a nestloop join between two
  *	  relations.

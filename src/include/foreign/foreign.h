@@ -13,7 +13,8 @@
 #ifndef FOREIGN_H
 #define FOREIGN_H
 
-#include "nodes/parsenodes.h"
+#include "executor/tuptable.h"
+#include "utils/relcache.h"
 
 
 /* Helper for obtaining username for user mapping */
@@ -29,7 +30,8 @@ typedef enum
 {
 	ServerOpt = 1,				/* options applicable to SERVER */
 	UserMappingOpt = 2,			/* options for USER MAPPING */
-	FdwOpt = 4					/* options for FOREIGN DATA WRAPPER */
+	FdwOpt = 4,					/* options for FOREIGN DATA WRAPPER */
+	ForeignTableOpt = 8,		/* options for FOREIGN TABLE */
 } GenericOptionFlags;
 
 typedef struct ForeignDataWrapper
@@ -38,6 +40,7 @@ typedef struct ForeignDataWrapper
 	Oid			owner;			/* FDW owner user Oid */
 	char	   *fdwname;		/* Name of the FDW */
 	Oid			fdwvalidator;
+	Oid			fdwhandler;
 	List	   *options;		/* fdwoptions as DefElem list */
 } ForeignDataWrapper;
 
@@ -59,7 +62,18 @@ typedef struct UserMapping
 	List	   *options;		/* useoptions as DefElem list */
 } UserMapping;
 
+typedef struct ForeignTable
+{
+	Oid			relid;			/* relation Oid */
+	Oid			serverid;		/* server Oid */
+	List 	   *options;		/* ftoptions as DefElem list */
+} ForeignTable;
 
+typedef struct FdwRoutine	FdwRoutine;
+typedef struct FSConnection FSConnection;
+typedef struct FdwReply FdwReply;
+
+/* catalog manipulation */
 extern ForeignServer *GetForeignServer(Oid serverid);
 extern ForeignServer *GetForeignServerByName(const char *name, bool missing_ok);
 extern Oid	GetForeignServerOidByName(const char *name, bool missing_ok);
@@ -68,5 +82,21 @@ extern ForeignDataWrapper *GetForeignDataWrapper(Oid fdwid);
 extern ForeignDataWrapper *GetForeignDataWrapperByName(const char *name,
 							bool missing_ok);
 extern Oid	GetForeignDataWrapperOidByName(const char *name, bool missing_ok);
+extern ForeignTable *GetForeignTable(Oid relid);
+extern FdwRoutine *GetFdwRoutine(Oid fdwhandler);
+extern FdwRoutine *GetFdwRoutineByRelId(Oid relid);
+extern bool IsForeignTable(Oid relid);
+extern Oid GetFdwValidator(Oid relid);
+extern List *GetGenericOptionsPerColumn(Oid relid, int2 attnum);
+
+extern int flatten_generic_options(List *options,
+						   const char **keywords, const char **values);
+
+/* ALTER FOREIGN TABLE ... OPTIONS (...) handlers */
+extern void ATExecGenericOptions(Relation rel, List *options);
+extern void ATExecColumnGenericOptions(Relation rel, const char *colname,
+									   List *options);
+extern void AlterColumnGenericOptions(Oid relid, const char *colname,
+									  List *options);
 
 #endif   /* FOREIGN_H */

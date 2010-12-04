@@ -16,6 +16,7 @@
 #include "catalog/namespace.h"
 #include "catalog/pg_foreign_data_wrapper.h"
 #include "catalog/pg_foreign_server.h"
+#include "catalog/pg_foreign_table.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_user_mapping.h"
 #include "foreign/foreign.h"
@@ -59,6 +60,7 @@ GetForeignDataWrapper(Oid fdwid)
 	fdw->owner = fdwform->fdwowner;
 	fdw->fdwname = pstrdup(NameStr(fdwform->fdwname));
 	fdw->fdwvalidator = fdwform->fdwvalidator;
+	fdw->fdwhandler = fdwform->fdwhandler;
 
 	/* Extract the options */
 	datum = SysCacheGetAttr(FOREIGNDATAWRAPPEROID,
@@ -413,4 +415,242 @@ postgresql_fdw_validator(PG_FUNCTION_ARGS)
 	}
 
 	PG_RETURN_BOOL(true);
+}
+
+/*
+ * GetForeignTable - look up the foreign table definition by relation oid.
+ */
+ForeignTable *
+GetForeignTable(Oid relid)
+{
+	Form_pg_foreign_table tableform;
+	ForeignTable *ft;
+	HeapTuple	tp;
+	Datum		datum;
+	bool		isnull;
+
+	tp = SearchSysCache(FOREIGNTABLEREL,
+						ObjectIdGetDatum(relid),
+						0, 0, 0);
+
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "cache lookup failed for foreign table %u", relid);
+
+	tableform = (Form_pg_foreign_table) GETSTRUCT(tp);
+
+	ft = palloc(sizeof(ForeignTable));
+	ft->relid = relid;
+	ft->serverid = tableform->ftserver;
+
+	/* Extract the ftoptions */
+	datum = SysCacheGetAttr(FOREIGNTABLEREL,
+							tp,
+							Anum_pg_foreign_table_ftoptions,
+							&isnull);
+
+	/* untransformRelOptions does exactly what we want - avoid duplication */
+	ft->options = untransformRelOptions(datum);
+	ReleaseSysCache(tp);
+
+	return ft;
+}
+
+/*
+ * GetFdwRoutine - look up the handler of the foreign-data wrapper by OID and
+ * retrieve FdwRoutine.
+ */
+FdwRoutine *
+GetFdwRoutine(Oid fdwhandler)
+{
+	FmgrInfo				flinfo;
+	FunctionCallInfoData	fcinfo;
+	Datum					result;
+	FdwRoutine			   *routine;
+
+	if (fdwhandler == InvalidOid)
+		elog(ERROR, "foreign-data wrapper has no handler");
+
+	fmgr_info(fdwhandler, &flinfo);
+	InitFunctionCallInfoData(fcinfo, &flinfo, 0, NULL, NULL);
+	result = FunctionCallInvoke(&fcinfo);
+
+	if (fcinfo.isnull ||
+		(routine = (FdwRoutine *) DatumGetPointer(result)) == NULL)
+	{
+		elog(ERROR, "function %u returned NULL", flinfo.fn_oid);
+		routine = NULL;	/* keep compiler quiet */
+	}
+
+	return routine;
+}
+
+/*
+ * GetFdwRoutineByRelId - look up the handler of the foreign-data wrapper by
+ * OID of the foreign table and retrieve FdwRoutine.
+ */
+FdwRoutine *
+GetFdwRoutineByRelId(Oid relid)
+{
+	HeapTuple				tp;
+	Form_pg_foreign_data_wrapper fdwform;
+	Form_pg_foreign_server	serverform;
+	Form_pg_foreign_table	tableform;
+	Oid						serverid;
+	Oid						fdwid;
+	Oid						fdwhandler;
+
+	/* Get function OID for the foreign table. */
+	tp = SearchSysCache1(FOREIGNTABLEREL, ObjectIdGetDatum(relid));
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "cache lookup failed for foreign table %u", relid);
+	tableform = (Form_pg_foreign_table) GETSTRUCT(tp);
+	serverid = tableform->ftserver;
+	ReleaseSysCache(tp);
+
+	tp = SearchSysCache1(FOREIGNSERVEROID, ObjectIdGetDatum(serverid));
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "cache lookup failed for foreign server %u", serverid);
+	serverform = (Form_pg_foreign_server) GETSTRUCT(tp);
+	fdwid = serverform->srvfdw;
+	ReleaseSysCache(tp);
+
+	tp = SearchSysCache1(FOREIGNDATAWRAPPEROID, ObjectIdGetDatum(fdwid));
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "cache lookup failed for foreign-data wrapper %u", fdwid);
+	fdwform = (Form_pg_foreign_data_wrapper) GETSTRUCT(tp);
+	fdwhandler = fdwform->fdwhandler;
+	ReleaseSysCache(tp);
+
+	return GetFdwRoutine(fdwhandler);
+}
+
+/*
+ * Determine the relation is a foreign table.
+ */
+bool
+IsForeignTable(Oid relid)
+{
+	HeapTuple	tuple;
+	Form_pg_class classForm;
+	char		relkind;
+
+	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+	if (!HeapTupleIsValid(tuple))
+		ereport(ERROR,
+			   (errcode(ERRCODE_UNDEFINED_TABLE),
+				errmsg("relation with OID %u does not exist", relid)));
+	classForm = (Form_pg_class) GETSTRUCT(tuple);
+	relkind = classForm->relkind;
+	ReleaseSysCache(tuple);
+
+	return (relkind == RELKIND_FOREIGN_TABLE);
+}
+
+/*
+ * Get fdwvalidator of the foreign table without generating ForeignTable,
+ * ForeignServer and ForeignDataWrapper.
+ */
+Oid
+GetFdwValidator(Oid relid)
+{
+	HeapTuple	tuple;
+	Oid			serverid;
+	Oid			fdwid;
+	Oid			fdwvalidator;
+	Form_pg_foreign_table			form_ft;
+	Form_pg_foreign_server			form_srv;
+	Form_pg_foreign_data_wrapper	form_fdw;
+
+	/* pg_foreign_table */
+	tuple = SearchSysCache(FOREIGNTABLEREL,
+						   ObjectIdGetDatum(relid),
+						   0, 0, 0);
+	if (!HeapTupleIsValid(tuple))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("foreign table reference \"%u\" is ambiguous", relid)));
+	form_ft = (Form_pg_foreign_table) GETSTRUCT(tuple);
+	serverid = form_ft->ftserver;
+	ReleaseSysCache(tuple);
+
+	/* pg_foreign_server */
+	tuple = SearchSysCache1(FOREIGNSERVEROID,
+							ObjectIdGetDatum(serverid));
+	if (!HeapTupleIsValid(tuple))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("foreign server reference \"%u\" is ambiguous",
+						serverid)));
+	form_srv = (Form_pg_foreign_server) GETSTRUCT(tuple);
+	fdwid = form_srv->srvfdw;
+	ReleaseSysCache(tuple);
+
+	/* pg_foreign_table */
+	tuple = SearchSysCache1(FOREIGNDATAWRAPPEROID,
+							ObjectIdGetDatum(fdwid));
+	if (!HeapTupleIsValid(tuple))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("foreign-data wrapper reference \"%u\" is ambiguous",
+						fdwid)));
+	form_fdw = (Form_pg_foreign_data_wrapper) GETSTRUCT(tuple);
+	fdwvalidator = form_fdw->fdwvalidator;
+	ReleaseSysCache(tuple);
+
+	return fdwvalidator;
+}
+
+/*
+ * Flattern generic options into keywords and values buffers.
+ */
+int
+flatten_generic_options(List *options, const char **keywords,
+						const char **values)
+{
+	ListCell   *cell;
+	int			n = 0;
+
+	foreach(cell, options)
+	{
+		DefElem	   *def = lfirst(cell);
+
+		keywords[n] = def->defname;
+		values[n] = strVal(def->arg);
+		n++;
+	}
+	return n;
+}
+
+/*
+ * Retrieve per-column generic options in form of DefElem.
+ */
+List *
+GetGenericOptionsPerColumn(Oid relid, int2 attnum)
+{
+	Form_pg_attribute	attform;
+	Datum				datum;
+	HeapTuple			tp;
+	bool				isnull;
+	List			   *options = NIL;
+
+	tp = SearchSysCache2(ATTNUM,
+						 ObjectIdGetDatum(relid),
+						 Int16GetDatum(attnum));
+
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "cache lookup failed for attribute attnum %u of relation %u", (int) attnum, relid);
+
+	attform = (Form_pg_attribute) GETSTRUCT(tp);
+
+	/* Extract the options */
+	datum = SysCacheGetAttr(ATTNUM,
+							tp,
+							Anum_pg_attribute_attgenoptions,
+							&isnull);
+	if (!isnull)
+		options = untransformRelOptions(datum);
+
+	ReleaseSysCache(tp);
+
+	return options;
 }

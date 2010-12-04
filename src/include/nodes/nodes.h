@@ -60,6 +60,7 @@ typedef enum NodeTag
 	T_ValuesScan,
 	T_CteScan,
 	T_WorkTableScan,
+	T_ForeignScan,
 	T_Join,
 	T_NestLoop,
 	T_MergeJoin,
@@ -103,6 +104,7 @@ typedef enum NodeTag
 	T_ValuesScanState,
 	T_CteScanState,
 	T_WorkTableScanState,
+	T_ForeignScanState,
 	T_JoinState,
 	T_NestLoopState,
 	T_MergeJoinState,
@@ -216,6 +218,7 @@ typedef enum NodeTag
 	T_MergePath,
 	T_HashPath,
 	T_TidPath,
+	T_ForeignPath,
 	T_AppendPath,
 	T_MergeAppendPath,
 	T_ResultPath,
@@ -353,6 +356,7 @@ typedef enum NodeTag
 	T_DropUserMappingStmt,
 	T_AlterTableSpaceOptionsStmt,
 	T_SecLabelStmt,
+	T_CreateForeignTableStmt,
 
 	/*
 	 * TAGS FOR PARSE TREE NODES (parsenodes.h)

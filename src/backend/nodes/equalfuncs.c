@@ -1628,7 +1628,7 @@ static bool
 _equalCreateFdwStmt(CreateFdwStmt *a, CreateFdwStmt *b)
 {
 	COMPARE_STRING_FIELD(fdwname);
-	COMPARE_NODE_FIELD(validator);
+	COMPARE_NODE_FIELD(func_options);
 	COMPARE_NODE_FIELD(options);
 
 	return true;
@@ -1638,8 +1638,7 @@ static bool
 _equalAlterFdwStmt(AlterFdwStmt *a, AlterFdwStmt *b)
 {
 	COMPARE_STRING_FIELD(fdwname);
-	COMPARE_NODE_FIELD(validator);
-	COMPARE_SCALAR_FIELD(change_validator);
+	COMPARE_NODE_FIELD(func_options);
 	COMPARE_NODE_FIELD(options);
 
 	return true;
@@ -1714,6 +1713,19 @@ _equalDropUserMappingStmt(DropUserMappingStmt *a, DropUserMappingStmt *b)
 	COMPARE_STRING_FIELD(username);
 	COMPARE_STRING_FIELD(servername);
 	COMPARE_SCALAR_FIELD(missing_ok);
+
+	return true;
+}
+
+static bool
+_equalCreateForeignTableStmt(CreateForeignTableStmt *a, CreateForeignTableStmt *b)
+{
+	if (!_equalCreateStmt(&a->base, &b->base))
+		return false;
+
+	COMPARE_STRING_FIELD(base.tablespacename);
+	COMPARE_STRING_FIELD(servername);
+	COMPARE_NODE_FIELD(options);
 
 	return true;
 }
@@ -2152,6 +2164,7 @@ _equalColumnDef(ColumnDef *a, ColumnDef *b)
 	COMPARE_NODE_FIELD(raw_default);
 	COMPARE_NODE_FIELD(cooked_default);
 	COMPARE_NODE_FIELD(constraints);
+	COMPARE_NODE_FIELD(genoptions);
 
 	return true;
 }
@@ -2820,6 +2833,9 @@ equal(void *a, void *b)
 			break;
 		case T_DropUserMappingStmt:
 			retval = _equalDropUserMappingStmt(a, b);
+			break;
+		case T_CreateForeignTableStmt:
+			retval = _equalCreateForeignTableStmt(a, b);
 			break;
 		case T_CreateTrigStmt:
 			retval = _equalCreateTrigStmt(a, b);

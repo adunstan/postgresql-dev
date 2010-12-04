@@ -23,6 +23,7 @@ PostgreSQL documentation
 <synopsis>
 CREATE FOREIGN DATA WRAPPER <replaceable class="parameter">name</replaceable>
     [ VALIDATOR <replaceable class="parameter">valfunction</replaceable> | NO VALIDATOR ]
+    [ HANDLER <replaceable class="parameter">handler</replaceable> | NO HANDLER ]
     [ OPTIONS ( <replaceable class="PARAMETER">option</replaceable> '<replaceable class="PARAMETER">value</replaceable>' [, ... ] ) ]
 </synopsis>
  </refsynopsisdiv>
@@ -77,6 +78,19 @@ CREATE FOREIGN DATA WRAPPER <replaceable class="parameter">name</replaceable>
       system catalog containing the options. The return type is ignored;
       the function should indicate invalid options using the
       <function>ereport()</function> function.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>HANDLER <replaceable class="parameter">handler</replaceable></literal></term>
+    <listitem>
+     <para>
+      <replaceable class="parameter">handler</replaceable> is the
+      name of a previously registered function that will be called to
+      retrieve a set of functions for foreign tables.
+      The validator function must take no arguments.
+      The return type must be <type>fdw_handler</type>.
      </para>
     </listitem>
    </varlistentry>
@@ -151,8 +165,8 @@ CREATE FOREIGN DATA WRAPPER mywrapper
 
   <para>
    <command>CREATE FOREIGN DATA WRAPPER</command> conforms to ISO/IEC
-   9075-9 (SQL/MED), with the exception that
-   the <literal>VALIDATOR</literal> clause is an extension and the
+   9075-9 (SQL/MED), with the exception that the <literal>VALIDATOR</literal>
+   and <literal>HANDLER</literal> clauses are extensions and the
    clauses <literal>LIBRARY</literal> and <literal>LANGUAGE</literal>
    are not yet implemented in PostgreSQL.
   </para>

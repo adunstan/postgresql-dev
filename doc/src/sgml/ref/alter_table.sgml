@@ -319,6 +319,12 @@ ALTER TABLE <replaceable class="PARAMETER">name</replaceable>
       that would add a normal column that happened to be named
       <literal>oid</>, not a system column.
      </para>
+
+     <para>
+      If the target table has been inherited by any foreign table, you can't
+      add <literal>oid</literal> system column because foreign table can't have
+      <literal>oid</literal>.
+     </para>
     </listitem>
    </varlistentry>
 

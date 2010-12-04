@@ -142,11 +142,12 @@ LockTableRecurse(Oid reloid, RangeVar *rv,
 		aclcheck_error(aclresult, ACL_KIND_CLASS,
 					   RelationGetRelationName(rel));
 
-	/* Currently, we only allow plain tables to be locked */
-	if (rel->rd_rel->relkind != RELKIND_RELATION)
+	/* Currently, we only allow plain tables and foreign tables to be locked */
+	if (rel->rd_rel->relkind != RELKIND_RELATION &&
+		rel->rd_rel->relkind != RELKIND_FOREIGN_TABLE)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not a table",
+				 errmsg("\"%s\" is not a table or foreign table",
 						RelationGetRelationName(rel))));
 
 	/*

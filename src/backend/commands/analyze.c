@@ -187,7 +187,7 @@ analyze_rel(Oid relid, VacuumStmt *vacstmt,
 		/* No need for a WARNING if we already complained during VACUUM */
 		if (!(vacstmt->options & VACOPT_VACUUM))
 			ereport(WARNING,
-					(errmsg("skipping \"%s\" --- cannot analyze indexes, views, or special system tables",
+					(errmsg("skipping \"%s\" --- cannot analyze indexes, views, foreign tables or special system tables",
 							RelationGetRelationName(onerel))));
 		relation_close(onerel, ShareUpdateExclusiveLock);
 		return;
@@ -1454,6 +1454,13 @@ acquire_inherited_sample_rows(Relation onerel, HeapTuple *rows, int targrows,
 		{
 			/* ... but release the lock on it */
 			Assert(childrel != onerel);
+			heap_close(childrel, AccessShareLock);
+			continue;
+		}
+
+		/* Ignore child foreign tables */
+		if (childrel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+		{
 			heap_close(childrel, AccessShareLock);
 			continue;
 		}

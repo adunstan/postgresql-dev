@@ -247,7 +247,7 @@ flagInhTables(TableInfo *tblinfo, int numTables,
 
 	for (i = 0; i < numTables; i++)
 	{
-		/* Sequences and views never have parents */
+		/* Sequences and views and foreign tables never have parents */
 		if (tblinfo[i].relkind == RELKIND_SEQUENCE ||
 			tblinfo[i].relkind == RELKIND_VIEW)
 			continue;

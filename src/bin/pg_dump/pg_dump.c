@@ -970,8 +970,9 @@ expand_table_name_patterns(SimpleStringList *patterns, SimpleOidList *oids)
 						  "SELECT c.oid"
 						  "\nFROM pg_catalog.pg_class c"
 		"\n     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace"
-						  "\nWHERE c.relkind in ('%c', '%c', '%c')\n",
-						  RELKIND_RELATION, RELKIND_SEQUENCE, RELKIND_VIEW);
+						  "\nWHERE c.relkind in ('%c', '%c', '%c', '%c')\n",
+						  RELKIND_RELATION, RELKIND_SEQUENCE, RELKIND_VIEW,
+						  RELKIND_FOREIGN_TABLE);
 		processSQLNamePattern(g_conn, query, cell->val, true, false,
 							  "n.nspname", "c.relname", NULL,
 							  "pg_catalog.pg_table_is_visible(c.oid)");
@@ -1470,6 +1471,9 @@ getTableData(TableInfo *tblinfo, int numTables, bool oids)
 			continue;
 		/* Skip SEQUENCEs (handled elsewhere) */
 		if (tblinfo[i].relkind == RELKIND_SEQUENCE)
+			continue;
+		/* Skip FOREIGN TABLEs (no data to dump) */
+		if (tblinfo[i].relkind == RELKIND_FOREIGN_TABLE)
 			continue;
 
 		if (tblinfo[i].dobj.dump)
@@ -3477,7 +3481,41 @@ getTables(int *numTables)
 	 * we cannot correctly identify inherited columns, owned sequences, etc.
 	 */
 
-	if (g_fout->remoteVersion >= 90000)
+	if (g_fout->remoteVersion >= 90100)
+	{
+		/*
+		 * Left join to pick up dependency info linking sequences to their
+		 * owning column, if any (note this dependency is AUTO as of 8.2)
+		 */
+		appendPQExpBuffer(query,
+						  "SELECT c.tableoid, c.oid, c.relname, "
+						  "c.relacl, c.relkind, c.relnamespace, "
+						  "(%s c.relowner) AS rolname, "
+						  "c.relchecks, c.relhastriggers, "
+						  "c.relhasindex, c.relhasrules, c.relhasoids, "
+						  "c.relfrozenxid, "
+						  "CASE WHEN c.reloftype <> 0 THEN c.reloftype::pg_catalog.regtype ELSE NULL END AS reloftype, "
+						  "d.refobjid AS owning_tab, "
+						  "d.refobjsubid AS owning_col, "
+						  "(SELECT spcname FROM pg_tablespace t WHERE t.oid = c.reltablespace) AS reltablespace, "
+						"array_to_string(c.reloptions, ', ') AS reloptions, "
+						  "array_to_string(array(SELECT 'toast.' || x FROM unnest(tc.reloptions) x), ', ') AS toast_reloptions "
+						  "FROM pg_class c "
+						  "LEFT JOIN pg_depend d ON "
+						  "(c.relkind = '%c' AND "
+						  "d.classid = c.tableoid AND d.objid = c.oid AND "
+						  "d.objsubid = 0 AND "
+						  "d.refclassid = c.tableoid AND d.deptype = 'a') "
+					   "LEFT JOIN pg_class tc ON (c.reltoastrelid = tc.oid) "
+						  "WHERE c.relkind in ('%c', '%c', '%c', '%c', '%c') "
+						  "ORDER BY c.oid",
+						  username_subquery,
+						  RELKIND_SEQUENCE,
+						  RELKIND_RELATION, RELKIND_SEQUENCE,
+						  RELKIND_VIEW, RELKIND_COMPOSITE_TYPE,
+						  RELKIND_FOREIGN_TABLE);
+	}
+	else if (g_fout->remoteVersion >= 90000)
 	{
 		/*
 		 * Left join to pick up dependency info linking sequences to their
@@ -3829,7 +3867,8 @@ getTables(int *numTables)
 		 * NOTE: it'd be kinda nice to lock views and sequences too, not only
 		 * plain tables, but the backend doesn't presently allow that.
 		 */
-		if (tblinfo[i].dobj.dump && tblinfo[i].relkind == RELKIND_RELATION)
+		if (tblinfo[i].dobj.dump && (tblinfo[i].relkind == RELKIND_RELATION ||
+			tblinfo[i].relkind == RELKIND_FOREIGN_TABLE))
 		{
 			resetPQExpBuffer(query);
 			appendPQExpBuffer(query,
@@ -5886,6 +5925,7 @@ getForeignDataWrappers(int *numForeignDataWrappers)
 	int			i_fdwname;
 	int			i_rolname;
 	int			i_fdwvalidator;
+	int			i_fdwhandler;
 	int			i_fdwacl;
 	int			i_fdwoptions;
 
@@ -5900,7 +5940,8 @@ getForeignDataWrappers(int *numForeignDataWrappers)
 	selectSourceSchema("pg_catalog");
 
 	appendPQExpBuffer(query, "SELECT tableoid, oid, fdwname, "
-		"(%s fdwowner) AS rolname, fdwvalidator::pg_catalog.regproc, fdwacl,"
+		"(%s fdwowner) AS rolname, fdwvalidator::pg_catalog.regproc, "
+		"fdwhandler::pg_catalog.regproc, fdwacl,"
 					  "array_to_string(ARRAY("
 		 "		SELECT option_name || ' ' || quote_literal(option_value) "
 	   "		FROM pg_options_to_table(fdwoptions)), ', ') AS fdwoptions "
@@ -5920,6 +5961,7 @@ getForeignDataWrappers(int *numForeignDataWrappers)
 	i_fdwname = PQfnumber(res, "fdwname");
 	i_rolname = PQfnumber(res, "rolname");
 	i_fdwvalidator = PQfnumber(res, "fdwvalidator");
+	i_fdwhandler = PQfnumber(res, "fdwhandler");
 	i_fdwacl = PQfnumber(res, "fdwacl");
 	i_fdwoptions = PQfnumber(res, "fdwoptions");
 
@@ -5933,6 +5975,7 @@ getForeignDataWrappers(int *numForeignDataWrappers)
 		fdwinfo[i].dobj.namespace = NULL;
 		fdwinfo[i].rolname = strdup(PQgetvalue(res, i, i_rolname));
 		fdwinfo[i].fdwvalidator = strdup(PQgetvalue(res, i, i_fdwvalidator));
+		fdwinfo[i].fdwhandler = strdup(PQgetvalue(res, i, i_fdwhandler));
 		fdwinfo[i].fdwoptions = strdup(PQgetvalue(res, i, i_fdwoptions));
 		fdwinfo[i].fdwacl = strdup(PQgetvalue(res, i, i_fdwacl));
 
@@ -10238,6 +10281,10 @@ dumpForeignDataWrapper(Archive *fout, FdwInfo *fdwinfo)
 		appendPQExpBuffer(q, " VALIDATOR %s",
 						  fdwinfo->fdwvalidator);
 
+	if (fdwinfo->fdwhandler && strcmp(fdwinfo->fdwhandler, "-") != 0)
+		appendPQExpBuffer(q, " HANDLER %s",
+						  fdwinfo->fdwhandler);
+
 	if (fdwinfo->fdwoptions && strlen(fdwinfo->fdwoptions) > 0)
 		appendPQExpBuffer(q, " OPTIONS (%s)", fdwinfo->fdwoptions);
 
@@ -10893,7 +10940,9 @@ dumpTable(Archive *fout, TableInfo *tbinfo)
 		/* Handle the ACL here */
 		namecopy = strdup(fmtId(tbinfo->dobj.name));
 		dumpACL(fout, tbinfo->dobj.catId, tbinfo->dobj.dumpId,
-				(tbinfo->relkind == RELKIND_SEQUENCE) ? "SEQUENCE" : "TABLE",
+				(tbinfo->relkind == RELKIND_SEQUENCE) ? "SEQUENCE" :
+				(tbinfo->relkind == RELKIND_FOREIGN_TABLE) ? "FOREIGN TABLE" :
+				"TABLE",
 				namecopy, NULL, tbinfo->dobj.name,
 				tbinfo->dobj.namespace->dobj.name, tbinfo->rolname,
 				tbinfo->relacl);
@@ -10962,6 +11011,8 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 	int			j,
 				k;
 	bool		toast_set = false;
+	char	   *srvname;
+	char	   *ftoptions = NULL;
 
 	/* Make sure we are in proper schema */
 	selectSourceSchema(tbinfo->dobj.namespace->dobj.name);
@@ -11035,7 +11086,35 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 	}
 	else
 	{
-		reltypename = "TABLE";
+		if (tbinfo->relkind == RELKIND_FOREIGN_TABLE)
+		{
+			int		i_srvname;
+			int		i_ftoptions;
+
+			reltypename = "FOREIGN TABLE";
+
+			/* retrieve name of foreign server and generic options */ 
+			appendPQExpBuffer(query,
+				"SELECT fs.srvname, array_to_string(ARRAY("
+				"   SELECT option_name || ' ' || quote_literal(option_value)"
+				"   FROM pg_options_to_table(ftoptions)), ', ') AS ftoptions "
+				"FROM pg_foreign_table ft JOIN pg_foreign_server fs "
+				"	ON (fs.oid = ft.ftserver) "
+				"WHERE ft.ftrelid = %u", tbinfo->dobj.catId.oid);
+			res = PQexec(g_conn, query->data);
+			check_sql_result(res, g_conn, query->data, PGRES_TUPLES_OK);
+			i_srvname = PQfnumber(res, "srvname");
+			i_ftoptions = PQfnumber(res, "ftoptions");
+			srvname = strdup(PQgetvalue(res, 0, i_srvname));
+			ftoptions = strdup(PQgetvalue(res, 0, i_ftoptions));
+			PQclear(res);
+		}
+		else
+		{
+			reltypename = "TABLE";
+			srvname = NULL;
+			ftoptions = NULL;
+		}
 		numParents = tbinfo->numParents;
 		parents = tbinfo->parents;
 
@@ -11043,7 +11122,7 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 		 * DROP must be fully qualified in case same name appears in
 		 * pg_catalog
 		 */
-		appendPQExpBuffer(delq, "DROP TABLE %s.",
+		appendPQExpBuffer(delq, "DROP %s %s.", reltypename,
 						  fmtId(tbinfo->dobj.namespace->dobj.name));
 		appendPQExpBuffer(delq, "%s;\n",
 						  fmtId(tbinfo->dobj.name));
@@ -11051,7 +11130,7 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 		if (binary_upgrade)
 			binary_upgrade_set_relfilenodes(q, tbinfo->dobj.catId.oid, false);
 
-		appendPQExpBuffer(q, "CREATE TABLE %s",
+		appendPQExpBuffer(q, "CREATE %s %s", reltypename,
 						  fmtId(tbinfo->dobj.name));
 		if (tbinfo->reloftype)
 			appendPQExpBuffer(q, " OF %s", tbinfo->reloftype);
@@ -11186,6 +11265,9 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 			appendPQExpBuffer(q, ")");
 		}
 
+		if (tbinfo->relkind == RELKIND_FOREIGN_TABLE)
+			appendPQExpBuffer(q, "\nSERVER %s", srvname);
+
 		if ((tbinfo->reloptions && strlen(tbinfo->reloptions) > 0) ||
 		  (tbinfo->toast_reloptions && strlen(tbinfo->toast_reloptions) > 0))
 		{
@@ -11205,6 +11287,10 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 			appendPQExpBuffer(q, ")");
 		}
 
+		/* Dump generic options if any */
+		if (ftoptions && ftoptions[0])
+			appendPQExpBuffer(q, "\nOPTIONS (%s)", ftoptions);
+
 		appendPQExpBuffer(q, ";\n");
 
 		/*
@@ -11219,7 +11305,7 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 		 * order.  That also means we have to take care about setting
 		 * attislocal correctly, plus fix up any inherited CHECK constraints.
 		 */
-		if (binary_upgrade)
+		if (binary_upgrade && tbinfo->relkind == RELKIND_RELATION)
 		{
 			for (j = 0; j < tbinfo->numatts; j++)
 			{

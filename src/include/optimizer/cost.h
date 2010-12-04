@@ -81,6 +81,7 @@ extern void cost_functionscan(Path *path, PlannerInfo *root,
 extern void cost_valuesscan(Path *path, PlannerInfo *root,
 				RelOptInfo *baserel);
 extern void cost_ctescan(Path *path, PlannerInfo *root, RelOptInfo *baserel);
+extern void cost_foreignscan(ForeignPath *path, PlannerInfo *root, RelOptInfo *baserel);
 extern void cost_recursive_union(Plan *runion, Plan *nrterm, Plan *rterm);
 extern void cost_sort(Path *path, PlannerInfo *root,
 		  List *pathkeys, Cost input_cost, double tuples, int width,

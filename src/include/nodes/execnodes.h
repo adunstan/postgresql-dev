@@ -17,8 +17,10 @@
 #include "access/genam.h"
 #include "access/heapam.h"
 #include "access/skey.h"
+#include "foreign/foreign.h"
 #include "nodes/params.h"
 #include "nodes/plannodes.h"
+#include "nodes/relation.h"
 #include "nodes/tidbitmap.h"
 #include "utils/hsearch.h"
 #include "utils/rel.h"
@@ -1385,6 +1387,81 @@ typedef struct WorkTableScanState
 	ScanState	ss;				/* its first field is NodeTag */
 	RecursiveUnionState *rustate;
 } WorkTableScanState;
+
+/* ----------------
+ *	 ForeignScanState information
+ *
+ *		ForeignScan nodes are used to scan the foreign table managed by
+ *		a foreign server.
+ * ----------------
+ */
+typedef struct ForeignScanState
+{
+	ScanState		ss;			/* its first field is NodeTag */
+
+	FdwRoutine	   *routine;	/* set of FDW routines */
+	ForeignDataWrapper *wrapper;/* foreign data wrapper */
+	ForeignServer  *server;		/* foreign server */
+	FSConnection   *conn;		/* connection to the foreign server */
+	UserMapping	   *user;		/* user mapping */
+	ForeignTable   *table;		/* foreign table */
+	FdwReply	   *reply;		/* private data for each data wrapper */
+} ForeignScanState;
+
+/*
+ * Common interface routines of FDW baed on SQL/MED standard.
+ * A foreign-data wrapper can implement FDW-specific works with these callback
+ * routines.  If there is nothing to do for a callback function other
+ * than Iterate, it can be NULL.
+ */
+struct FdwRoutine
+{
+	/*
+	 * Connect to the foreign server identified by server and user.
+	 * Each FDW also manages connection cache because the FDW only knows the
+	 * acutal size of the concrete connection object.
+	 */
+	FSConnection* (*ConnectServer)(ForeignServer *server, UserMapping *user);
+
+	/*
+	 * Disconnect and free FSConnection.
+	 */
+	void (*FreeFSConnection)(FSConnection *conn);
+
+	/*
+	 * Estimate costs of a foreign path.
+	 * FDW should update startup_cost and total_cost in the Path.
+	 */
+	void (*EstimateCosts)(ForeignPath *path, PlannerInfo *root,
+						  RelOptInfo *baserel);
+
+	/*
+	 * Prepare to execute foreign access.
+	 */
+	void (*Open)(ForeignScanState *scanstate);
+
+	/*
+	 * Initiate scanning of a foreign table.
+	 */
+	void (*BeginScan)(ForeignScanState *scanstate);
+
+	/*
+	 * Fetch the next record and fill tupleslot with it.
+	 * This routine can't be NULL.
+	 */
+	void (*Iterate)(ForeignScanState *scanstate);
+
+	/*
+	 * End the foreign scan and close cursor.
+	 */
+	void (*Close)(ForeignScanState *scanstate);
+
+	/*
+	 * Re-initialize the foreign scan, used when the INNER executor node is
+	 * executed again.
+	 */
+	void (*ReOpen)(ForeignScanState *scanstate);
+};
 
 /* ----------------------------------------------------------------
  *				 Join State Information

@@ -136,6 +136,7 @@ DefineSequence(CreateSeqStmt *seq)
 		coldef->raw_default = NULL;
 		coldef->cooked_default = NULL;
 		coldef->constraints = NIL;
+		coldef->genoptions = NIL;
 
 		null[i - 1] = false;
 

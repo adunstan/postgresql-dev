@@ -43,6 +43,7 @@
 #include "catalog/objectaccess.h"
 #include "catalog/pg_attrdef.h"
 #include "catalog/pg_constraint.h"
+#include "catalog/pg_foreign_table.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_statistic.h"
@@ -122,9 +123,9 @@ static List *insert_ordered_unique_oid(List *list, Oid datum);
  */
 
 /*
- * The initializers below do not include the attoptions or attacl fields,
- * but that's OK - we're never going to reference anything beyond the
- * fixed-size portion of the structure anyway.
+ * The initializers below do not include the attgenoptions or attoptions or
+ * attacl fields, but that's OK - we're never going to reference anything
+ * beyond the fixed-size portion of the structure anyway.
  */
 
 static FormData_pg_attribute a1 = {
@@ -268,6 +269,7 @@ heap_create(const char *relname,
 	{
 		case RELKIND_VIEW:
 		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
 			create_storage = false;
 
 			/*
@@ -542,6 +544,7 @@ InsertPgAttributeTuple(Relation pg_attribute_rel,
 	/* start out with empty permissions and empty options */
 	nulls[Anum_pg_attribute_attacl - 1] = true;
 	nulls[Anum_pg_attribute_attoptions - 1] = true;
+	nulls[Anum_pg_attribute_attgenoptions - 1] = true;
 
 	tup = heap_form_tuple(RelationGetDescr(pg_attribute_rel), values, nulls);
 
@@ -770,7 +773,7 @@ AddNewRelationTuple(Relation pg_class_desc,
 			new_rel_reltup->reltuples = 1;
 			break;
 		default:
-			/* Views, etc, have no disk storage */
+			/* Views and foreign tables, etc, have no disk storage */
 			new_rel_reltup->relpages = 0;
 			new_rel_reltup->reltuples = 0;
 			break;
@@ -984,7 +987,8 @@ heap_create_with_catalog(const char *relname,
 		/* Use binary-upgrade overrides if applicable */
 		if (OidIsValid(binary_upgrade_next_heap_relfilenode) &&
 			(relkind == RELKIND_RELATION || relkind == RELKIND_SEQUENCE ||
-			 relkind == RELKIND_VIEW || relkind == RELKIND_COMPOSITE_TYPE))
+			 relkind == RELKIND_VIEW || relkind == RELKIND_COMPOSITE_TYPE ||
+			 relkind == RELKIND_FOREIGN_TABLE))
 		{
 			relid = binary_upgrade_next_heap_relfilenode;
 			binary_upgrade_next_heap_relfilenode = InvalidOid;
@@ -1010,6 +1014,7 @@ heap_create_with_catalog(const char *relname,
 		{
 			case RELKIND_RELATION:
 			case RELKIND_VIEW:
+			case RELKIND_FOREIGN_TABLE:
 				relacl = get_user_default_acl(ACL_OBJECT_RELATION, ownerid,
 											  relnamespace);
 				break;
@@ -1046,7 +1051,7 @@ heap_create_with_catalog(const char *relname,
 	 * Decide whether to create an array type over the relation's rowtype. We
 	 * do not create any array types for system catalogs (ie, those made
 	 * during initdb).	We create array types for regular relations, views,
-	 * and composite types ... but not, eg, for toast tables or sequences.
+	 * composite types and foreign tables ... but not, eg, for toast tables or sequences.
 	 */
 	if (IsUnderPostmaster && (relkind == RELKIND_RELATION ||
 							  relkind == RELKIND_VIEW ||
@@ -1568,10 +1573,32 @@ heap_drop_with_catalog(Oid relid)
 						RelationGetRelationName(rel))));
 
 	/*
+	 * Delete pg_foreign_table tuple first.
+	 */
+	if (rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+	{
+		Relation    rel;
+		HeapTuple   tuple;
+
+		rel = heap_open(ForeignTableRelationId, RowExclusiveLock);
+
+		tuple = SearchSysCache(FOREIGNTABLEREL,
+								ObjectIdGetDatum(relid), 0, 0, 0);
+		if (!HeapTupleIsValid(tuple))
+			elog(ERROR, "cache lookup failed for foreign table %u", relid);
+
+		simple_heap_delete(rel, &tuple->t_self);
+
+		ReleaseSysCache(tuple);
+		heap_close(rel, RowExclusiveLock);
+	}
+
+	/*
 	 * Schedule unlinking of the relation's physical files at commit.
 	 */
 	if (rel->rd_rel->relkind != RELKIND_VIEW &&
-		rel->rd_rel->relkind != RELKIND_COMPOSITE_TYPE)
+		rel->rd_rel->relkind != RELKIND_COMPOSITE_TYPE &&
+		rel->rd_rel->relkind != RELKIND_FOREIGN_TABLE)
 	{
 		RelationDropStorage(rel);
 	}

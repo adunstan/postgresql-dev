@@ -1026,6 +1026,28 @@ cost_ctescan(Path *path, PlannerInfo *root, RelOptInfo *baserel)
 }
 
 /*
+ * cost_foreignscan
+ *	  Determines and returns the cost of scanning a foreign table sequentially.
+ */
+void
+cost_foreignscan(ForeignPath *path, PlannerInfo *root,
+			 RelOptInfo *baserel)
+{
+	RangeTblEntry  *rte;
+	FdwRoutine	   *routine;
+
+	/* Should only be applied to base relations */
+	Assert(baserel->relid > 0);
+	Assert(baserel->rtekind == RTE_RELATION);
+
+	/* Leave estimation of the costs to the wrapper handler */
+	rte = planner_rt_fetch(baserel->relid, root);
+	routine = GetFdwRoutineByRelId(rte->relid);
+	if (routine->EstimateCosts != NULL)
+		routine->EstimateCosts(path, root, baserel);
+}
+
+/*
  * cost_recursive_union
  *	  Determines and returns the cost of performing a recursive union,
  *	  and also the estimated output size.

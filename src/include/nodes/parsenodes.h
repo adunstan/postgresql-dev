@@ -482,6 +482,7 @@ typedef struct ColumnDef
 	Node	   *raw_default;	/* default value (untransformed parse tree) */
 	Node	   *cooked_default; /* default value (transformed expr tree) */
 	List	   *constraints;	/* other constraints on column */
+	List	   *genoptions;		/* generic options */
 } ColumnDef;
 
 /*
@@ -501,7 +502,11 @@ typedef enum CreateStmtLikeOption
 	CREATE_TABLE_LIKE_INDEXES = 1 << 2,
 	CREATE_TABLE_LIKE_STORAGE = 1 << 3,
 	CREATE_TABLE_LIKE_COMMENTS = 1 << 4,
-	CREATE_TABLE_LIKE_ALL = 0x7FFFFFFF
+	CREATE_TABLE_LIKE_ALL = 0x7FFFFFFF,
+	/* FOREIGN TABLE supports only DEFALUT/CONSTRAINT/COMMENT. */
+	CREATE_TABLE_LIKE_FOREIGN_ALL = ( CREATE_TABLE_LIKE_DEFAULTS |
+									  CREATE_TABLE_LIKE_CONSTRAINTS |
+									  CREATE_TABLE_LIKE_COMMENTS)
 } CreateStmtLikeOption;
 
 /*
@@ -1066,6 +1071,7 @@ typedef enum ObjectType
 	OBJECT_DOMAIN,
 	OBJECT_FDW,
 	OBJECT_FOREIGN_SERVER,
+	OBJECT_FOREIGN_TABLE,
 	OBJECT_FUNCTION,
 	OBJECT_INDEX,
 	OBJECT_LANGUAGE,
@@ -1165,7 +1171,9 @@ typedef enum AlterTableType
 	AT_EnableReplicaRule,		/* ENABLE REPLICA RULE name */
 	AT_DisableRule,				/* DISABLE RULE name */
 	AT_AddInherit,				/* INHERIT parent */
-	AT_DropInherit				/* NO INHERIT parent */
+	AT_DropInherit,				/* NO INHERIT parent */
+	AT_GenericOptions,			/* OPTIONS (...) */
+	AT_ColumnGenericOptions,	/* ALTER COLUMN OPTIONS (...) */
 } AlterTableType;
 
 typedef struct AlterTableCmd	/* one subcommand of an ALTER TABLE */
@@ -1226,6 +1234,7 @@ typedef enum GrantObjectType
 	ACL_OBJECT_DATABASE,		/* database */
 	ACL_OBJECT_FDW,				/* foreign-data wrapper */
 	ACL_OBJECT_FOREIGN_SERVER,	/* foreign server */
+	ACL_OBJECT_FOREIGN_TABLE,	/* foreign table */
 	ACL_OBJECT_FUNCTION,		/* function */
 	ACL_OBJECT_LANGUAGE,		/* procedural language */
 	ACL_OBJECT_LARGEOBJECT,		/* largeobject */
@@ -1526,7 +1535,7 @@ typedef struct CreateFdwStmt
 {
 	NodeTag		type;
 	char	   *fdwname;		/* foreign-data wrapper name */
-	List	   *validator;		/* optional validator function (qual. name) */
+	List	   *func_options;	/* VALIDATOR/HANDLER conbination */
 	List	   *options;		/* generic options to FDW */
 } CreateFdwStmt;
 
@@ -1534,8 +1543,7 @@ typedef struct AlterFdwStmt
 {
 	NodeTag		type;
 	char	   *fdwname;		/* foreign-data wrapper name */
-	List	   *validator;		/* optional validator function (qual. name) */
-	bool		change_validator;
+	List	   *func_options;	/* VALIDATOR/HANDLER conbination */
 	List	   *options;		/* generic options to FDW */
 } AlterFdwStmt;
 
@@ -1578,6 +1586,18 @@ typedef struct DropForeignServerStmt
 	bool		missing_ok;		/* ignore missing servers */
 	DropBehavior behavior;		/* drop behavior - cascade/restrict */
 } DropForeignServerStmt;
+
+/* ----------------------
+ *		Create FOREIGN TABLE Statements
+ * ----------------------
+ */
+
+typedef struct CreateForeignTableStmt
+{
+	CreateStmt	base;
+	char	   *servername;
+	List	   *options;
+} CreateForeignTableStmt;
 
 /* ----------------------
  *		Create/Drop USER MAPPING Statements

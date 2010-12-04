@@ -547,6 +547,22 @@ _copyWorkTableScan(WorkTableScan *from)
 }
 
 /*
+ * _copyForeignScan
+ */
+static ForeignScan *
+_copyForeignScan(ForeignScan *from)
+{
+	ForeignScan *newnode = makeNode(ForeignScan);
+
+	/*
+	 * copy node superclass fields
+	 */
+	CopyScanFields((Scan *) from, (Scan *) newnode);
+
+	return newnode;
+}
+
+/*
  * CopyJoinFields
  *
  *		This function copies the fields of the Join node.  It is used by
@@ -2216,6 +2232,7 @@ _copyColumnDef(ColumnDef *from)
 	COPY_NODE_FIELD(raw_default);
 	COPY_NODE_FIELD(cooked_default);
 	COPY_NODE_FIELD(constraints);
+	COPY_NODE_FIELD(genoptions);
 
 	return newnode;
 }
@@ -3190,7 +3207,7 @@ _copyCreateFdwStmt(CreateFdwStmt *from)
 	CreateFdwStmt *newnode = makeNode(CreateFdwStmt);
 
 	COPY_STRING_FIELD(fdwname);
-	COPY_NODE_FIELD(validator);
+	COPY_NODE_FIELD(func_options);
 	COPY_NODE_FIELD(options);
 
 	return newnode;
@@ -3202,8 +3219,7 @@ _copyAlterFdwStmt(AlterFdwStmt *from)
 	AlterFdwStmt *newnode = makeNode(AlterFdwStmt);
 
 	COPY_STRING_FIELD(fdwname);
-	COPY_NODE_FIELD(validator);
-	COPY_SCALAR_FIELD(change_validator);
+	COPY_NODE_FIELD(func_options);
 	COPY_NODE_FIELD(options);
 
 	return newnode;
@@ -3292,6 +3308,25 @@ _copyDropUserMappingStmt(DropUserMappingStmt *from)
 	COPY_STRING_FIELD(username);
 	COPY_STRING_FIELD(servername);
 	COPY_SCALAR_FIELD(missing_ok);
+
+	return newnode;
+}
+
+static CreateForeignTableStmt *
+_copyCreateForeignTableStmt(CreateForeignTableStmt *from)
+{
+	CreateForeignTableStmt *newnode = makeNode(CreateForeignTableStmt);
+
+	COPY_NODE_FIELD(base.relation);
+	COPY_NODE_FIELD(base.tableElts);
+	COPY_NODE_FIELD(base.inhRelations);
+	COPY_NODE_FIELD(base.ofTypename);
+	COPY_NODE_FIELD(base.constraints);
+	COPY_NODE_FIELD(base.options);
+	COPY_SCALAR_FIELD(base.oncommit);
+	COPY_STRING_FIELD(base.tablespacename);
+	COPY_STRING_FIELD(servername);
+	COPY_NODE_FIELD(options);
 
 	return newnode;
 }
@@ -3731,6 +3766,9 @@ copyObject(void *from)
 			break;
 		case T_WorkTableScan:
 			retval = _copyWorkTableScan(from);
+			break;
+		case T_ForeignScan:
+			retval = _copyForeignScan(from);
 			break;
 		case T_Join:
 			retval = _copyJoin(from);
@@ -4193,6 +4231,9 @@ copyObject(void *from)
 			break;
 		case T_DropUserMappingStmt:
 			retval = _copyDropUserMappingStmt(from);
+			break;
+		case T_CreateForeignTableStmt:
+			retval = _copyCreateForeignTableStmt(from);
 			break;
 		case T_CreateTrigStmt:
 			retval = _copyCreateTrigStmt(from);

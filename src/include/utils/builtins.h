@@ -515,6 +515,8 @@ extern Datum pg_node_tree_in(PG_FUNCTION_ARGS);
 extern Datum pg_node_tree_out(PG_FUNCTION_ARGS);
 extern Datum pg_node_tree_recv(PG_FUNCTION_ARGS);
 extern Datum pg_node_tree_send(PG_FUNCTION_ARGS);
+extern Datum fdw_handler_in(PG_FUNCTION_ARGS);
+extern Datum fdw_handler_out(PG_FUNCTION_ARGS);
 
 /* regexp.c */
 extern Datum nameregexeq(PG_FUNCTION_ARGS);

@@ -128,6 +128,7 @@ DefineVirtualRelation(const RangeVar *relation, List *tlist, bool replace)
 			def->raw_default = NULL;
 			def->cooked_default = NULL;
 			def->constraints = NIL;
+			def->genoptions = NIL;
 
 			attrList = lappend(attrList, def);
 		}

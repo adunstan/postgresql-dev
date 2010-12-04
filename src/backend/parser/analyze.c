@@ -28,6 +28,7 @@
 #include "catalog/pg_type.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/pg_list.h"
 #include "optimizer/var.h"
 #include "parser/analyze.h"
 #include "parser/parse_agg.h"
@@ -40,6 +41,7 @@
 #include "parser/parse_target.h"
 #include "parser/parsetree.h"
 #include "rewrite/rewriteManip.h"
+#include "utils/lsyscache.h"
 #include "utils/rel.h"
 
 
@@ -2281,6 +2283,15 @@ applyLockingClause(Query *qry, Index rtindex,
 				   bool forUpdate, bool noWait, bool pushedDown)
 {
 	RowMarkClause *rc;
+	RangeTblEntry *rte;
+
+	/* If rangetable is a foreign table, locking is not allowed */
+	rte = list_nth(qry->rtable, rtindex - 1);
+	if (rte->rtekind == RTE_RELATION &&
+		get_rel_relkind(rte->relid) == RELKIND_FOREIGN_TABLE)
+		ereport(ERROR,
+			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+			 errmsg("SELECT FOR UPDATE/SHARE is not allowed with foreign tables")));
 
 	/* If it's an explicit clause, make sure hasForUpdate gets set */
 	if (!pushedDown)
