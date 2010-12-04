@@ -28,6 +28,10 @@
 
 #include "file_parser.h"
 
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 PG_MODULE_MAGIC;
 
 /*
