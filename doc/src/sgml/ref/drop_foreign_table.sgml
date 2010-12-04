@@ -1,0 +1,123 @@
+<!--
+$PostgreSQL$
+PostgreSQL documentation
+-->
+
+<refentry id="SQL-DROPFOREIGNTABLE">
+ <refmeta>
+  <refentrytitle>DROP FOREIGN TABLE</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>DROP FOREIGN TABLE</refname>
+  <refpurpose>remove a foreign table</refpurpose>
+ </refnamediv>
+
+ <indexterm zone="sql-dropforeigntable">
+  <primary>DROP FOREIGN TABLE</primary>
+ </indexterm>
+
+ <refsynopsisdiv>
+<synopsis>
+DROP FOREIGN TABLE [ IF EXISTS ] <replaceable class="PARAMETER">name</replaceable> [, ...] [ CASCADE | RESTRICT ]
+</synopsis>
+ </refsynopsisdiv>
+ 
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   <command>DROP FOREIGN TABLE</command> removes foreign tables from the database.
+   Only its owner can drop a foreign table.
+  </para>
+
+  <para>
+   <command>DROP FOREIGN TABLE</command> always removes any rules
+   and constraints that exist for the target table.
+   However, to drop a foreign table that is referenced by a view,
+   <literal>CASCADE</> must be
+   specified. (<literal>CASCADE</> will remove a dependent view entirely,
+  </para>
+ </refsect1>
+  
+ <refsect1>
+  <title>Parameters</title>
+
+  <variablelist>
+   <varlistentry>
+    <term><literal>IF EXISTS</literal></term>
+    <listitem>
+     <para>
+      Do not throw an error if theforeign table does not exist. A notice is issued 
+      in this case.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="PARAMETER">name</replaceable></term>
+    <listitem>
+     <para>
+      The name (optionally schema-qualified) of theforeign table to drop.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>CASCADE</literal></term>
+    <listitem>
+     <para>
+      Automatically drop objects that depend on theforeign table (such as
+      views).
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>RESTRICT</literal></term>
+    <listitem>
+     <para>
+      Refuse to drop theforeign table if any objects depend on it.  This is
+      the default.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+ </refsect1>
+
+ <refsect1>
+  <title>Examples</title>
+
+  <para>
+   To destroy two foreign tables, <literal>films</literal> and 
+   <literal>distributors</literal>:
+
+<programlisting>
+DROP FOREIGN TABLE films, distributors;
+</programlisting>
+  </para>
+ </refsect1>
+ 
+ <refsect1>
+  <title>Compatibility</title>
+
+  <para>
+   This command conforms to the ISO/IEC 9075-9 (SQL/MED), except that the
+   standard only allows one foreign table to be dropped per command, and apart
+   from the <literal>IF EXISTS</> option, which is a <productname>PostgreSQL</>
+   extension.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="sql-alterforeigntable"></member>
+   <member><xref linkend="sql-createforeigntable"></member>
+  </simplelist>
+ </refsect1>
+
+</refentry>

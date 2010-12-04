@@ -1,0 +1,536 @@
+<!--
+$PostgreSQL$
+PostgreSQL documentation
+-->
+
+<refentry id="SQL-ALTERFOREIGNTABLE">
+ <refmeta>
+  <refentrytitle>ALTER FOREIGN TABLE</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>ALTER FOREIGN TABLE</refname>
+  <refpurpose>change the definition of a foreign table</refpurpose>
+ </refnamediv>
+
+ <indexterm zone="sql-alterforeigntable">
+  <primary>ALTER FOREIGN TABLE</primary>
+ </indexterm>
+
+ <refsynopsisdiv>
+<synopsis>
+ALTER FOREIGN TABLE <replaceable class="PARAMETER">name</replaceable> [ * ]
+    <replaceable class="PARAMETER">action</replaceable> [, ... ]
+ALTER FOREIGN TABLE <replaceable class="PARAMETER">name</replaceable> [ * ]
+    RENAME [ COLUMN ] <replaceable class="PARAMETER">column</replaceable> TO <replaceable class="PARAMETER">new_column</replaceable>
+ALTER FOREIGN TABLE <replaceable class="PARAMETER">name</replaceable>
+    RENAME TO <replaceable class="PARAMETER">new_name</replaceable>
+ALTER FOREIGN TABLE <replaceable class="PARAMETER">name</replaceable>
+    SET SCHEMA <replaceable class="PARAMETER">new_schema</replaceable>
+
+<phrase>where <replaceable class="PARAMETER">action</replaceable> is one of:</phrase>
+
+    ADD [ COLUMN ] <replaceable class="PARAMETER">column</replaceable> <replaceable class="PARAMETER">type</replaceable> [ <replaceable class="PARAMETER">column_constraint</replaceable> [ ... ] ]
+    DROP [ COLUMN ] [ IF EXISTS ] <replaceable class="PARAMETER">column</replaceable> [ RESTRICT | CASCADE ]
+    ALTER [ COLUMN ] <replaceable class="PARAMETER">column</replaceable> [ SET DATA ] TYPE <replaceable class="PARAMETER">type</replaceable>
+    ALTER [ COLUMN ] <replaceable class="PARAMETER">column</replaceable> SET DEFAULT <replaceable class="PARAMETER">expression</replaceable>
+    ALTER [ COLUMN ] <replaceable class="PARAMETER">column</replaceable> DROP DEFAULT
+    ALTER [ COLUMN ] <replaceable class="PARAMETER">column</replaceable> { SET | DROP } NOT NULL
+    ALTER [ COLUMN ] <replaceable class="PARAMETER">column</replaceable> OPTIONS ( [ ADD | SET | DROP ] <replaceable class="PARAMETER">option</replaceable> ['<replaceable class="PARAMETER">value</replaceable>'] [, ... ])
+    ADD <replaceable class="PARAMETER">table_constraint</replaceable>
+    DROP CONSTRAINT [ IF EXISTS ]  <replaceable class="PARAMETER">constraint_name</replaceable> [ RESTRICT | CASCADE ]
+    DISABLE RULE <replaceable class="PARAMETER">rewrite_rule_name</replaceable>
+    ENABLE RULE <replaceable class="PARAMETER">rewrite_rule_name</replaceable>
+    ENABLE REPLICA RULE <replaceable class="PARAMETER">rewrite_rule_name</replaceable>
+    ENABLE ALWAYS RULE <replaceable class="PARAMETER">rewrite_rule_name</replaceable>
+    INHERIT <replaceable class="PARAMETER">parent_table</replaceable>
+    NO INHERIT <replaceable class="PARAMETER">parent_table</replaceable>
+    OWNER TO <replaceable class="PARAMETER">new_owner</replaceable>
+    OPTIONS ( [ ADD | SET | DROP ] <replaceable class="PARAMETER">option</replaceable> ['<replaceable class="PARAMETER">value</replaceable>'] [, ... ])
+</synopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   <command>ALTER FOREIGN TABLE</command> changes the definition of an existing table.
+   There are several subforms:
+
+  <variablelist>
+   <varlistentry>
+    <term><literal>ADD COLUMN</literal></term>
+    <listitem>
+     <para>
+      This form adds a new column to the foreign table, using the same syntax as
+      <xref linkend="SQL-CREATEFOREIGNTABLE">.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>DROP COLUMN [ IF EXISTS ]</literal></term>
+    <listitem>
+     <para>
+      This form drops a column from a foreign table.
+      Table constraints involving the column will be automatically
+      dropped as well.  You will need to say <literal>CASCADE</> if
+      anything outside the table depends on the column, for example,
+      views.
+      If <literal>IF EXISTS</literal> is specified and the column
+      does not exist, no error is thrown. In this case a notice
+      is issued instead.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>SET DATA TYPE</literal></term>
+    <listitem>
+     <para>
+      This form changes the type of a column of a foreign table.
+      Simple table constraints involving the column will be automatically
+      converted to use the new column type by reparsing the originally
+      supplied expression.  The optional <literal>USING</literal>
+      clause specifies how to compute the new column value from the old;
+      if omitted, the default conversion is the same as an assignment
+      cast from old data type to new.  A  <literal>USING</literal>
+      clause must be provided if there is no implicit or assignment
+      cast from old to new type.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>SET</literal>/<literal>DROP NOT NULL</literal></term>
+    <listitem>
+     <para>
+      These forms change whether a column is marked to allow null
+      values or to reject null values.  You can only use <literal>SET
+      NOT NULL</> when the column contains no null values.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>ADD <replaceable class="PARAMETER">table_constraint</replaceable></literal></term>
+    <listitem>
+     <para>
+      This form adds a new constraint to a foreign table using the same syntax as
+      <xref linkend="SQL-CREATETABLE">.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>DROP CONSTRAINT [ IF EXISTS ]</literal></term>
+    <listitem>
+     <para>
+      This form drops the specified constraint on a foreign table.
+      If <literal>IF EXISTS</literal> is specified and the constraint
+      does not exist, no error is thrown. In this case a notice is issued instead.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>DISABLE</literal>/<literal>ENABLE [ REPLICA | ALWAYS ] RULE</literal></term>
+    <listitem>
+     <para>
+      These forms configure the firing of rewrite rules belonging to the table.
+      A disabled rule is still known to the system, but is not applied
+      during query rewriting.
+      This configuration is ignored for <literal>ON SELECT</literal> rules, which
+      are always applied in order to keep views working even if the current
+      session is in a non-default replication role.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>INHERIT <replaceable class="PARAMETER">parent_table</replaceable></literal></term>
+    <listitem>
+     <para>
+      This form adds the target table as a new child of the specified parent
+      table.  Subsequently, queries against the parent will include records
+      of the target table.  To be added as a child, the target table must
+      already contain all the same columns as the parent (it could have
+      additional columns, too).  The columns must have matching data types,
+      and if they have <literal>NOT NULL</literal> constraints in the parent
+      then they must also have <literal>NOT NULL</literal> constraints in the
+      child.
+     </para>
+
+     <para>
+      There must also be matching child-table constraints for all
+      <literal>CHECK</literal> constraints of the parent.
+     </para>
+
+     <para>
+      The parent must not have OIDs because foreign table can't have OIDs.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>NO INHERIT <replaceable class="PARAMETER">parent_table</replaceable></literal></term>
+    <listitem>
+     <para>
+      This form removes the target table from the list of children of the
+      specified parent table.
+      Queries against the parent table will no longer include records drawn
+      from the target table.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>OWNER</literal></term>
+    <listitem>
+     <para>
+      This form changes the owner of the foreign table to the
+      specified user.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>RENAME</literal></term>
+    <listitem>
+     <para>
+      The <literal>RENAME</literal> forms change the name of a foreign table
+      or the name of an individual column in
+      a foreign table. There is no effect on the stored data.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>SET SCHEMA</literal></term>
+    <listitem>
+     <para>
+      This form moves the foreign table into another schema.  Associated
+      constraints owned by table columns are moved as well.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>OPTIONS ( [ ADD | SET | DROP ] <replaceable class="PARAMETER">option</replaceable> ['<replaceable class="PARAMETER">value</replaceable>'] [, ... ] )</literal></term>
+    <listitem>
+     <para>
+      Change options for the foreign table or the column of the foreign table.
+      <literal>ADD</>, <literal>SET</>, and <literal>DROP</>
+      specify the action to be performed.  <literal>ADD</> is assumed
+      if no operation is explicitly specified.  Option names must be
+      unique; names and values are also validated using the foreign
+      data wrapper library.
+     </para>
+    </listitem>
+   </varlistentry>
+
+  </variablelist>
+  </para>
+
+  <para>
+   All the actions except <literal>RENAME</literal> and <literal>SET SCHEMA</>
+   can be combined into
+   a list of multiple alterations to apply in parallel.  For example, it
+   is possible to add several columns and/or alter the type of several
+   columns in a single command.  This is particularly useful with large
+   foreign tables, since only one pass over the table need be made.
+  </para>
+
+  <para>
+   You must own the table to use <command>ALTER FOREIGN TABLE</>.
+   To change the schema of a foreign table, you must also have
+   <literal>CREATE</literal> privilege on the new schema.
+   To add the table as a new child of a parent table, you must own the
+   parent table as well.
+   To alter the owner, you must also be a direct or indirect member of the new
+   owning role, and that role must have <literal>CREATE</literal> privilege on
+   the table's schema.  (These restrictions enforce that altering the owner
+   doesn't do anything you couldn't do by dropping and recreating the table.
+   However, a superuser can alter ownership of any table anyway.)
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+    <variablelist>
+
+     <varlistentry>
+      <term><replaceable class="PARAMETER">name</replaceable></term>
+      <listitem>
+       <para>
+        The name (possibly schema-qualified) of an existing table to
+        alter. If <literal>ONLY</> is specified, only that table is
+        altered. If <literal>ONLY</> is not specified, the table and any
+        descendant foreign tables are altered.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><replaceable class="PARAMETER">column</replaceable></term>
+      <listitem>
+       <para>
+        Name of a new or existing column.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><replaceable class="PARAMETER">new_column</replaceable></term>
+      <listitem>
+       <para>
+        New name for an existing column.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><replaceable class="PARAMETER">new_name</replaceable></term>
+      <listitem>
+       <para>
+        New name for the table.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><replaceable class="PARAMETER">type</replaceable></term>
+      <listitem>
+       <para>
+        Data type of the new column, or new data type for an existing
+        column.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><replaceable class="PARAMETER">table_constraint</replaceable></term>
+      <listitem>
+       <para>
+        New table constraint for the table.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><replaceable class="PARAMETER">constraint_name</replaceable></term>
+      <listitem>
+       <para>
+        Name of an existing constraint to drop.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>CASCADE</literal></term>
+      <listitem>
+       <para>
+        Automatically drop objects that depend on the dropped column
+        or constraint (for example, views referencing the column).
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>RESTRICT</literal></term>
+      <listitem>
+       <para>
+        Refuse to drop the column or constraint if there are any dependent
+        objects. This is the default behavior.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><replaceable class="PARAMETER">storage_parameter</replaceable></term>
+      <listitem>
+       <para>
+        The name of a foreign table storage parameter.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><replaceable class="PARAMETER">value</replaceable></term>
+      <listitem>
+       <para>
+        The new value for a foreign table storage parameter.
+        This might be a number or a word depending on the parameter.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><replaceable class="PARAMETER">parent_table</replaceable></term>
+      <listitem>
+       <para>
+        A parent table to associate or de-associate with this table.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><replaceable class="PARAMETER">new_owner</replaceable></term>
+      <listitem>
+       <para>
+        The user name of the new owner of the table.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><replaceable class="PARAMETER">new_schema</replaceable></term>
+      <listitem>
+       <para>
+        The name of the schema to which the table will be moved.
+       </para>
+      </listitem>
+     </varlistentry>
+
+    </variablelist>
+ </refsect1>
+
+ <refsect1>
+  <title>Notes</title>
+
+   <para>
+    The key word <literal>COLUMN</literal> is noise and can be omitted.
+   </para>
+
+   <para>
+    Consistency with the foreign server is not checked even when a column is
+    added or removed with <literal>ADD COLUMN</literal> or
+    <literal>DROP COLUMN</literal>, a system <literal>oid</> column is added
+    or removed, a <literal>CHECK</> or <literal>NOT NULL</> constraint is
+    added, or column type is changed with <literal>ALTER TYPE</>.
+   </para>
+
+   <para>
+    Refer to <xref linkend="sql-createforeigntable"> for a further description of valid
+    parameters. <xref linkend="ddl"> has further information on
+    inheritance.
+   </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Examples</title>
+
+  <para>
+   To add a column of type <type>varchar</type> to a foreign table:
+<programlisting>
+ALTER FOREIGN TABLE distributors ADD COLUMN address varchar(30);
+</programlisting>
+  </para>
+
+  <para>
+   To drop a column from a foreign table:
+<programlisting>
+ALTER FOREIGN TABLE distributors DROP COLUMN address RESTRICT;
+</programlisting>
+  </para>
+
+  <para>
+   To change the types of two existing columns in one operation:
+<programlisting>
+ALTER FOREIGN TABLE distributors
+    ALTER COLUMN address TYPE varchar(80),
+    ALTER COLUMN name TYPE varchar(100);
+</programlisting>
+  </para>
+
+  <para>
+   To rename an existing column:
+<programlisting>
+ALTER FOREIGN TABLE distributors RENAME COLUMN address TO city;
+</programlisting>
+  </para>
+
+  <para>
+   To rename an existing table:
+<programlisting>
+ALTER FOREIGN TABLE distributors RENAME TO suppliers;
+</programlisting>
+  </para>
+
+  <para>
+   To add a not-null constraint to a column:
+<programlisting>
+ALTER FOREIGN TABLE distributors ALTER COLUMN street SET NOT NULL;
+</programlisting>
+   To remove a not-null constraint from a column:
+<programlisting>
+ALTER FOREIGN TABLE distributors ALTER COLUMN street DROP NOT NULL;
+</programlisting>
+  </para>
+
+  <para>
+   To chage options of a column of a foreign table:
+<programlisting>
+ALTER FOREIGN TABLE myschema.distributors ALTER COLUMN street OPTIONS (ADD opt1 'value', SET opt2, 'value2', DROP opt3 'value3');
+</programlisting>
+  </para>
+
+  <para>
+   To add a check constraint to a foreign table:
+<programlisting>
+ALTER FOREIGN TABLE distributors ADD CONSTRAINT zipchk CHECK (char_length(zipcode) = 5);
+</programlisting>
+  </para>
+
+  <para>
+   To remove a check constraint from a foreign table and all its children:
+<programlisting>
+ALTER FOREIGN TABLE distributors DROP CONSTRAINT zipchk;
+</programlisting>
+  </para>
+
+  <para>
+   To remove a check constraint from a foreign table only:
+<programlisting>
+ALTER FOREIGN TABLE ONLY distributors DROP CONSTRAINT zipchk;
+</programlisting>
+  </para>
+
+  <para>
+   To move a foreign table to a different schema:
+<programlisting>
+ALTER FOREIGN TABLE myschema.distributors SET SCHEMA yourschema;
+</programlisting>
+  </para>
+
+  <para>
+   To chage options of a foreign table:
+<programlisting>
+ALTER FOREIGN TABLE myschema.distributors OPTIONS (ADD opt1 'value', SET opt2, 'value2', DROP opt3 'value3');
+</programlisting>
+  </para>
+
+ </refsect1>
+
+ <refsect1>
+  <title>Compatibility</title>
+
+  <para>
+   The forms <literal>ADD</literal>, <literal>DROP</>,
+   and <literal>SET DATA TYPE</literal>
+   conform with the SQL standard.  The other forms are
+   <productname>PostgreSQL</productname> extensions of the SQL standard.
+   Also, the ability to specify more than one manipulation in a single
+   <command>ALTER FOREIGN TABLE</> command is an extension.
+  </para>
+
+  <para>
+   <command>ALTER FOREIGN TABLE DROP COLUMN</> can be used to drop the only
+   column of a foreign table, leaving a zero-column table.  This is an
+   extension of SQL, which disallows zero-column foreign tables.
+  </para>
+ </refsect1>
+</refentry>

@@ -1,0 +1,435 @@
+<!--
+$PostgreSQL$
+PostgreSQL documentation
+-->
+
+<refentry id="SQL-CREATEFOREIGNTABLE">
+ <refmeta>
+  <refentrytitle>CREATE FOREIGN TABLE</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>CREATE FOREIGN TABLE</refname>
+  <refpurpose>define a new foreign table</refpurpose>
+ </refnamediv>
+
+ <indexterm zone="sql-createforeigntable">
+  <primary>CREATE FOREIGN TABLE</primary>
+ </indexterm>
+
+ <refsynopsisdiv>
+<synopsis>
+CREATE FOREIGN TABLE <replaceable class="PARAMETER">table_name</replaceable> ( [
+  { <replaceable class="PARAMETER">column_name</replaceable> <replaceable class="PARAMETER">data_type</replaceable> [ OPTIONS ( <replaceable class="PARAMETER">option</replaceable> '<replaceable class="PARAMETER">value</replaceable>' [, ... ] ) ] [ <replaceable class="PARAMETER">column_constraint</replaceable> [ ... ] ]
+    | <replaceable>table_constraint</replaceable>
+    | LIKE <replaceable>parent_table</replaceable> [ <replaceable>like_option</replaceable> ... ] }
+    [, ... ]
+] )
+[ INHERITS ( <replaceable>parent_table</replaceable> [, ... ] ) ]
+  SERVER <replaceable class="parameter">server_name</replaceable>
+[ OPTIONS ( <replaceable class="PARAMETER">option</replaceable> '<replaceable class="PARAMETER">value</replaceable>' [, ... ] ) ]
+
+<phrase>where <replaceable class="PARAMETER">column_constraint</replaceable> is:</phrase>
+
+[ CONSTRAINT <replaceable class="PARAMETER">constraint_name</replaceable> ]
+{ NOT NULL |
+  NULL |
+  CHECK ( <replaceable class="PARAMETER">expression</replaceable> )
+}
+
+<phrase>and <replaceable class="PARAMETER">table_constraint</replaceable> is:</phrase>
+
+[ CONSTRAINT <replaceable class="PARAMETER">constraint_name</replaceable> ]
+CHECK ( <replaceable class="PARAMETER">expression</replaceable> )
+
+<phrase>and <replaceable class="PARAMETER">like_option</replaceable> is:</phrase>
+
+{ INCLUDING | EXCLUDING } { DEFAULTS | CONSTRAINTS | COMMENTS | ALL }
+</synopsis>
+
+ </refsynopsisdiv>
+
+ <refsect1 id="SQL-CREATEFOREIGNTABLE-description">
+  <title>Description</title>
+
+  <para>
+   <command>CREATE FOREIGN TABLE</command> will create a new foreign table
+   in the current database. The table will be owned by the user issuing the
+   command.
+  </para>
+
+  <para>
+   If a schema name is given (for example, <literal>CREATE FOREIGN TABLE
+   myschema.mytable ...</>) then the table is created in the specified
+   schema.  Otherwise it is created in the current schema.
+   The name of the foreign table must be
+   distinct from the name of any other foreign table, table, sequence, index,
+   or view in the same schema.
+  </para>
+
+  <para>
+   <command>CREATE FOREIGN TABLE</command> also automatically creates a data
+   type that represents the composite type corresponding to one row of
+   the foreign table.  Therefore, foreign tables cannot have the same
+   name as any existing data type in the same schema.
+  </para>
+
+  <para>
+   The optional constraint clauses specify constraints (tests) that
+   retrieved rows must satisfy for an select operation
+   to succeed.  A constraint is an SQL object that helps define the
+   set of valid values in the table in various ways.
+  </para>
+
+  <para>
+   There are two ways to define constraints: table constraints and
+   column constraints.  A column constraint is defined as part of a
+   column definition.  A table constraint definition is not tied to a
+   particular column, and it can encompass more than one column.
+   Every column constraint can also be written as a table constraint;
+   a column constraint is only a notational convenience for use when the
+   constraint only affects one column.
+  </para>
+
+  <para>
+  To create a foreign table, the foreign-data wrapper of the foreign
+  server must have handler function.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+  <variablelist>
+
+   <varlistentry>
+    <term><replaceable class="PARAMETER">table_name</replaceable></term>
+    <listitem>
+     <para>
+      The name (optionally schema-qualified) of the table to be created.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="PARAMETER">column_name</replaceable></term>
+    <listitem>
+     <para>
+      The name of a column to be created in the new table.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="PARAMETER">data_type</replaceable></term>
+    <listitem>
+     <para>
+      The data type of the column. This can include array
+      specifiers. For more information on the data types supported by
+      <productname>PostgreSQL</productname>, refer to <xref
+      linkend="datatype">.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>OPTIONS ( <replaceable class="PARAMETER">option</replaceable> = '<replaceable class="PARAMETER">value</replaceable>' [, ...] )</literal></term>
+    <listitem>
+     <para>
+      This clause specified options for the new foreign table, or the
+      column of the new foreign table.
+      The allowed option names and values are specific to each foreign
+      data wrapper and are validated using the foreign-data wrapper
+      library. Option names must be unique. 
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>INHERITS ( <replaceable>parent_table</replaceable> [, ... ] )</literal></term>
+    <listitem>
+     <para>
+      The optional <literal>INHERITS</> clause specifies a list of
+      tables from which the new table automatically inherits all
+      columns.
+     </para>
+
+     <para>
+      Use of <literal>INHERITS</> creates a persistent relationship
+      between the new child table and its parent table(s).  Schema
+      modifications to the parent(s) normally propagate to children
+      as well, and by default the data of the child table is included in
+      scans of the parent(s).
+     </para>
+
+     <para>
+      If the same column name exists in more than one parent
+      table, an error is reported unless the data types of the columns
+      match in each of the parent tables.  If there is no conflict,
+      then the duplicate columns are merged to form a single column in
+      the new table.  If the column name list of the new table
+      contains a column name that is also inherited, the data type must
+      likewise match the inherited column(s), and the column
+      definitions are merged into one.  If the
+      new table explicitly specifies a default value for the column,
+      this default overrides any defaults from inherited declarations
+      of the column.  Otherwise, any parents that specify default
+      values for the column must all specify the same default, or an
+      error will be reported.
+     </para>
+
+     <para>
+      <literal>CHECK</> constraints are merged in essentially the same way as
+      columns: if multiple parent tables and/or the new table definition
+      contain identically-named <literal>CHECK</> constraints, these
+      constraints must all have the same check expression, or an error will be
+      reported.  Constraints having the same name and expression will
+      be merged into one copy.  Notice that an unnamed <literal>CHECK</>
+      constraint in the new table will never be merged, since a unique name
+      will always be chosen for it.
+     </para>
+
+     <para>
+      The parent must not have OIDs because foreign table can't have OIDs.
+     </para>
+
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>LIKE <replaceable>parent_table</replaceable> [ <replaceable>like_option</replaceable> ... ]</literal></term>
+    <listitem>
+     <para>
+      The <literal>LIKE</literal> clause specifies a table from which
+      the new table automatically copies all column names, their data types,
+      and their not-null constraints.
+     </para>
+     <para>
+      Unlike <literal>INHERITS</literal>, the new table and original table
+      are completely decoupled after creation is complete.  Changes to the
+      original table will not be applied to the new table, and it is not
+      possible to include data of the new table in scans of the original
+      table.
+     </para>
+     <para>
+      Default expressions for the copied column definitions will only be
+      copied if <literal>INCLUDING DEFAULTS</literal> is specified.  The
+      default behavior is to exclude default expressions, resulting in the
+      copied columns in the new table having null defaults.
+     </para>
+     <para>
+      Not-null constraints are always copied to the new table.
+      <literal>CHECK</literal> constraints will only be copied if
+      <literal>INCLUDING CONSTRAINTS</literal> is specified; other types of
+      constraints will never be copied. Also, no distinction is made between
+      column constraints and table constraints &mdash; when constraints are
+      requested, all check constraints are copied.
+     </para>
+     <para>
+      Comments for the copied columns and constraints
+      will only be copied if <literal>INCLUDING COMMENTS</literal>
+      is specified. The default behavior is to exclude comments, resulting in
+      the copied columns and constraints in the new table having no comments.
+     </para>
+     <para>
+      <literal>INCLUDING ALL</literal> is an abbreviated form of
+      <literal>INCLUDING DEFAULTS INCLUDING CONSTRAINTS INCLUDING COMMENTS</literal>.
+     </para>
+     <para>
+      Note also that unlike <literal>INHERITS</literal>, columns and
+      constraints copied by <literal>LIKE</> are not merged with similarly
+      named columns and constraints.
+      If the same name is specified explicitly or in another
+      <literal>LIKE</literal> clause, an error is signalled.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>CONSTRAINT <replaceable class="PARAMETER">constraint_name</replaceable></literal></term>
+    <listitem>
+     <para>
+      An optional name for a column or table constraint.  If the
+      constraint is violated, the constraint name is present in error messages,
+      so constraint names like <literal>col must be positive</> can be used
+      to communicate helpful constraint information to client applications.
+      (Double-quotes are needed to specify constraint names that contain spaces.)
+      If a constraint name is not specified, the system generates a name.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>NOT NULL</></term>
+    <listitem>
+     <para>
+      The column is not allowed to contain null values.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>NULL</></term>
+    <listitem>
+     <para>
+      The column is allowed to contain null values. This is the default.
+     </para>
+
+     <para>
+      This clause is only provided for compatibility with
+      non-standard SQL databases.  Its use is discouraged in new
+      applications.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>CHECK ( <replaceable class="PARAMETER">expression</replaceable> )</literal></term>
+    <listitem>
+     <para>
+      The <literal>CHECK</> clause specifies an expression producing a
+      Boolean result which new or updated rows must satisfy for an
+      insert or update operation to succeed.  Expressions evaluating
+      to TRUE or UNKNOWN succeed.  Should any row of an insert or
+      update operation produce a FALSE result an error exception is
+      raised and the insert or update does not alter the database.  A
+      check constraint specified as a column constraint should
+      reference that column's value only, while an expression
+      appearing in a table constraint can reference multiple columns.
+     </para>
+
+     <para>
+      Currently, <literal>CHECK</literal> expressions cannot contain
+      subqueries nor refer to variables other than columns of the
+      current row.
+     </para>
+    </listitem>
+   </varlistentry>
+
+  </variablelist>
+
+ </refsect1>
+
+
+ <refsect1 id="SQL-CREATEFOREIGNTABLE-examples">
+  <title>Examples</title>
+
+  <para>
+   Create foreign table <structname>films</> with <structname>film_server</>:
+
+<programlisting>
+CREATE FOREIGN TABLE films (
+    code        char(5) NOT NULL,
+    title       varchar(40) NOT NULL,
+    did         integer NOT NULL,
+    date_prod   date,
+    kind        varchar(10),
+    len         interval hour to minute
+)
+SERVER film_server;
+</programlisting>
+  </para>
+
+  <para>
+   Define a check column constraint:
+
+<programlisting>
+CREATE FOREIGN TABLE distributors (
+    did     integer CHECK (did &gt; 100),
+    name    varchar(40)
+)
+SERVER distributor_server;
+</programlisting>
+  </para>
+
+  <para>
+   Define a check table constraint:
+
+<programlisting>
+CREATE FOREIGN TABLE distributors (
+    did     integer,
+    name    varchar(40)
+    CONSTRAINT con1 CHECK (did &gt; 100 AND name &lt;&gt; '')
+)
+SERVER distributor_server;
+</programlisting>
+  </para>
+
+ </refsect1>
+
+ <refsect1 id="SQL-CREATEFOREIGNTABLE-compatibility">
+  <title id="SQL-CREATEFOREIGNTABLE-compatibility-title">Compatibility</title>
+
+  <para>
+   The <command>CREATE FOREIGN TABLE</command> command conforms to the
+   <acronym>SQL</acronym> standard, with exceptions listed below.
+  </para>
+
+  <refsect2>
+   <title>Column Check Constraints</title>
+
+   <para>
+    The SQL standard says that <literal>CHECK</> column constraints
+    can only refer to the column they apply to; only <literal>CHECK</>
+    table constraints can refer to multiple columns.
+    <productname>PostgreSQL</productname> does not enforce this
+    restriction; it treats column and table check constraints alike.
+   </para>
+  </refsect2>
+
+  <refsect2>
+   <title><literal>NULL</literal> <quote>Constraint</quote></title>
+
+   <para>
+    The <literal>NULL</> <quote>constraint</quote> (actually a
+    non-constraint) is a <productname>PostgreSQL</productname>
+    extension to the SQL standard that is included for compatibility with some
+    other database systems (and for symmetry with the <literal>NOT
+    NULL</literal> constraint).  Since it is the default for any
+    column, its presence is simply noise.
+   </para>
+  </refsect2>
+
+  <refsect2>
+   <title>Inheritance</title>
+
+   <para>
+    Multiple inheritance via the <literal>INHERITS</literal> clause is
+    a <productname>PostgreSQL</productname> language extension.
+    SQL:1999 and later define single inheritance using a
+    different syntax and different semantics.  SQL:1999-style
+    inheritance is not yet supported by
+    <productname>PostgreSQL</productname>.
+   </para>
+  </refsect2>
+
+  <refsect2>
+   <title>Zero-column tables</title>
+
+   <para>
+    <productname>PostgreSQL</productname> allows a table of no columns
+    to be created (for example, <literal>CREATE FOREIGN TABLE foo();</>).  This
+    is an extension from the SQL standard, which does not allow zero-column
+    tables.  Zero-column tables are not in themselves very useful, but
+    disallowing them creates odd special cases for <command>ALTER TABLE
+    DROP COLUMN</>, so it seems cleaner to ignore this spec restriction.
+   </para>
+  </refsect2>
+
+ </refsect1>
+
+
+ <refsect1>
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="sql-alterforeigntable"></member>
+   <member><xref linkend="sql-dropforeigntable"></member>
+   <member><xref linkend="sql-createtable"></member>
+   <member><xref linkend="sql-createtype"></member>
+   <member><xref linkend="sql-createserver"></member>
+  </simplelist>
+ </refsect1>
+</refentry>
