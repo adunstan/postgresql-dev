@@ -93,6 +93,7 @@ psql -d dbname -f <replaceable>SHAREDIR</>/contrib/<replaceable>module</>.sql
  &dict-xsyn;
  &dummy-seclabel;
  &earthdistance;
+ &file-fdw;
  &fuzzystrmatch;
  &hstore;
  &intagg;
