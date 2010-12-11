@@ -108,6 +108,7 @@ typedef struct plperl_proc_desc
 	int			nargs;
 	FmgrInfo	arg_out_func[FUNC_MAX_ARGS];
 	bool		arg_is_rowtype[FUNC_MAX_ARGS];
+	Oid 		arg_type[FUNC_MAX_ARGS];
 	SV		   *reference;
 } plperl_proc_desc;
 
@@ -188,6 +189,7 @@ static PerlInterpreter *plperl_held_interp = NULL;
 
 /* GUC variables */
 static bool plperl_use_strict = false;
+static bool plperl_pass_binary_bytea = false;
 static char *plperl_on_init = NULL;
 static char *plperl_on_plperl_init = NULL;
 static char *plperl_on_plperlu_init = NULL;
@@ -313,6 +315,14 @@ _PG_init(void)
 							 &plperl_use_strict,
 							 false,
 							 PGC_USERSET, 0,
+							 NULL, NULL);
+
+	DefineCustomBoolVariable("plperl.pass_binary_bytea",
+							 gettext_noop("If true, bytea arguments will be passed natively and bytea return values treated as native format."),
+							 NULL,
+							 &plperl_pass_binary_bytea,
+							 false,
+							 PGC_SUSET, 0,
 							 NULL, NULL);
 
 	/*
@@ -1104,6 +1114,20 @@ plperl_trigger_build_args(FunctionCallInfo fcinfo)
 	return newRV_noinc((SV *) hv);
 }
 
+static inline Datum
+plperl_binary_string_bytea(SV *val)
+{
+	bytea      *data;
+	char       *perlval;
+	STRLEN      len;
+
+	perlval = SvPV(val, len);
+	data = (bytea *) palloc(len + VARHDRSZ);
+	SET_VARSIZE(data, len + VARHDRSZ);
+	memcpy(VARDATA(data), perlval, len);
+	PG_RETURN_BYTEA_P(data);
+}
+
 
 /* Set up the new tuple returned from a trigger. */
 
@@ -1162,10 +1186,20 @@ plperl_modify_tuple(HV *hvTD, TriggerData *tdata, HeapTuple otup)
 		atttypmod = tupdesc->attrs[attn - 1]->atttypmod;
 		if (SvOK(val))
 		{
-			modvalues[slotsused] = InputFunctionCall(&finfo,
-													 sv2text_mbverified(val),
-													 typioparam,
-													 atttypmod);
+			if (tupdesc->attrs[attn - 1]->atttypid == BYTEAOID && 
+				plperl_pass_binary_bytea)
+			{
+				/* binary format bytea - just fetch it direct */
+				modvalues[slotsused] = plperl_binary_string_bytea(val);
+			}
+			else
+			{
+				/* text format, use input function */
+				modvalues[slotsused] = InputFunctionCall(&finfo,
+														 sv2text_mbverified(val),
+														 typioparam,
+														 atttypmod);
+			}
 			modnulls[slotsused] = ' ';
 		}
 		else
@@ -1500,7 +1534,19 @@ plperl_call_perl_func(plperl_proc_desc *desc, FunctionCallInfo fcinfo)
 	for (i = 0; i < desc->nargs; i++)
 	{
 		if (fcinfo->argnull[i])
+		{
+			/* SQL NULL = Perl undef */
 			PUSHs(&PL_sv_undef);
+		}
+		else if (desc->arg_type[i] == BYTEAOID && plperl_pass_binary_bytea)
+		{
+			bytea      *data = PG_GETARG_BYTEA_P(i);
+			int         datalen;
+
+			datalen = VARSIZE(data) - VARHDRSZ;
+			sv = newSVpv(VARDATA(data), datalen);
+			PUSHs(sv_2mortal(sv));
+		}
 		else if (desc->arg_is_rowtype[i])
 		{
 			HeapTupleHeader td;
@@ -1728,6 +1774,11 @@ plperl_func_handler(PG_FUNCTION_ARGS)
 		retval = InputFunctionCall(&prodesc->result_in_func, NULL,
 								   prodesc->result_typioparam, -1);
 		fcinfo->isnull = true;
+	}
+	else if (prodesc->result_oid == BYTEAOID && plperl_pass_binary_bytea)
+	{
+		/* convert bytea as binary directly if flag set */
+		retval = plperl_binary_string_bytea(perlret);
 	}
 	else if (prodesc->fn_retistuple)
 	{
@@ -2132,6 +2183,8 @@ compile_plperl_function(Oid fn_oid, bool is_trigger)
 					perm_fmgr_info(typeStruct->typoutput,
 								   &(prodesc->arg_out_func[i]));
 				}
+				
+				prodesc->arg_type[i] = procStruct->proargtypes.values[i];
 
 				ReleaseSysCache(typeTup);
 			}
@@ -2220,15 +2273,26 @@ plperl_hash_from_tuple(HeapTuple tuple, TupleDesc tupdesc)
 			continue;
 		}
 
-		/* XXX should have a way to cache these lookups */
-		getTypeOutputInfo(tupdesc->attrs[i]->atttypid,
-						  &typoutput, &typisvarlena);
+		if (tupdesc->attrs[i]->atttypid == BYTEAOID && plperl_pass_binary_bytea)
+		{
+			bytea      *data = DatumGetByteaP(attr);
+			int         datalen;
 
-		outputstr = OidOutputFunctionCall(typoutput, attr);
+			datalen = VARSIZE(data) - VARHDRSZ;
+			hv_store_string(hv, attname, newSVpv(VARDATA(data), datalen));
+		}
+		else
+		{
+			/* XXX should have a way to cache these lookups */
+			getTypeOutputInfo(tupdesc->attrs[i]->atttypid,
+							  &typoutput, &typisvarlena);
 
-		hv_store_string(hv, attname, newSVstring(outputstr));
+			outputstr = OidOutputFunctionCall(typoutput, attr);
 
-		pfree(outputstr);
+			hv_store_string(hv, attname, newSVstring(outputstr));
+
+			pfree(outputstr);
+		}
 	}
 
 	return newRV_noinc((SV *) hv);
@@ -2467,9 +2531,17 @@ plperl_return_next(SV *sv)
 				sv = plperl_convert_to_pg_array(sv);
 			}
 
-			ret = InputFunctionCall(&prodesc->result_in_func,
-									sv2text_mbverified(sv),
-									prodesc->result_typioparam, -1);
+			if (prodesc->result_oid == BYTEAOID && plperl_pass_binary_bytea)
+			{
+				ret = plperl_binary_string_bytea(sv);
+			}
+			else
+			{
+				ret = InputFunctionCall(&prodesc->result_in_func,
+										sv2text_mbverified(sv),
+										prodesc->result_typioparam, -1);
+			}
+
 			isNull = false;
 		}
 		else
@@ -2876,10 +2948,18 @@ plperl_spi_exec_prepared(char *query, HV *attr, int argc, SV **argv)
 		{
 			if (SvOK(argv[i]))
 			{
-				argvalues[i] = InputFunctionCall(&qdesc->arginfuncs[i],
-												 sv2text_mbverified(argv[i]),
-												 qdesc->argtypioparams[i],
-												 -1);
+				if (qdesc->argtypes[i] == BYTEAOID && plperl_pass_binary_bytea)
+				{
+					argvalues[i] = plperl_binary_string_bytea(argv[i]);
+				}
+				else
+				{
+					argvalues[i] = InputFunctionCall(&qdesc->arginfuncs[i],
+													 sv2text_mbverified(argv[i]),
+													 qdesc->argtypioparams[i],
+													 -1);
+				}
+
 				nulls[i] = ' ';
 			}
 			else
@@ -3009,10 +3089,17 @@ plperl_spi_query_prepared(char *query, int argc, SV **argv)
 		{
 			if (SvOK(argv[i]))
 			{
-				argvalues[i] = InputFunctionCall(&qdesc->arginfuncs[i],
-												 sv2text_mbverified(argv[i]),
-												 qdesc->argtypioparams[i],
-												 -1);
+				if (qdesc->argtypes[i] == BYTEAOID && plperl_pass_binary_bytea)
+				{
+					argvalues[i] = plperl_binary_string_bytea(argv[i]);
+				}
+				else
+				{
+					argvalues[i] = InputFunctionCall(&qdesc->arginfuncs[i],
+													 sv2text_mbverified(argv[i]),
+													 qdesc->argtypioparams[i],
+													 -1);
+				}
 				nulls[i] = ' ';
 			}
 			else
