@@ -322,7 +322,7 @@ _PG_init(void)
 							 NULL,
 							 &plperl_pass_binary_bytea,
 							 false,
-							 PGC_SUSET, 0,
+							 PGC_USERSET, 0,
 							 NULL, NULL);
 
 	/*
