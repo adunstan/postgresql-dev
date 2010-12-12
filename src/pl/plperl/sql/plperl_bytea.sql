@@ -1,9 +1,9 @@
 
-set plperl.pass_binary_bytea = true;
-
 create function test_perl_bytea(str bytea) 
 returns bytea
-language plperl as
+language plperl 
+set plperl.pass_binary_bytea = true
+as
 $func$
 
 my $arg = shift;
