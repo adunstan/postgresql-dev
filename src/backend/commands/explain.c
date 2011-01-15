@@ -705,6 +705,9 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_WorkTableScan:
 			pname = sname = "WorkTable Scan";
 			break;
+		case T_ForeignScan:
+			pname = sname = "Foreign Scan";
+			break;
 		case T_Material:
 			pname = sname = "Materialize";
 			break;
@@ -854,6 +857,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_ValuesScan:
 		case T_CteScan:
 		case T_WorkTableScan:
+		case T_ForeignScan:
 			ExplainScanTarget((Scan *) plan, es);
 			break;
 		case T_BitmapIndexScan:
@@ -1033,6 +1037,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_ValuesScan:
 		case T_CteScan:
 		case T_WorkTableScan:
+		case T_ForeignScan:
 		case T_SubqueryScan:
 			show_scan_qual(plan->qual, "Filter", planstate, ancestors, es);
 			break;
@@ -1098,6 +1103,14 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			break;
 		default:
 			break;
+	}
+
+	/* Show FDW specific information, if any */
+	if (es->verbose && IsA(plan, ForeignScan))
+	{
+		ForeignScan *scan = (ForeignScan *) plan;
+		if (scan->fplan->explainInfo)
+			ExplainPropertyText("FDW-Info", scan->fplan->explainInfo, es);
 	}
 
 	/* Show buffer usage */
@@ -1570,6 +1583,7 @@ ExplainScanTarget(Scan *plan, ExplainState *es)
 		case T_IndexScan:
 		case T_BitmapHeapScan:
 		case T_TidScan:
+		case T_ForeignScan:
 			/* Assert it's on a real relation */
 			Assert(rte->rtekind == RTE_RELATION);
 			objectname = get_rel_name(rte->relid);

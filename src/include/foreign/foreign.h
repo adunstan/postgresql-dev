@@ -13,6 +13,7 @@
 #ifndef FOREIGN_H
 #define FOREIGN_H
 
+#include "foreign/fdwapi.h"
 #include "nodes/parsenodes.h"
 
 
@@ -38,6 +39,7 @@ typedef struct ForeignDataWrapper
 	Oid			owner;			/* FDW owner user Oid */
 	char	   *fdwname;		/* Name of the FDW */
 	Oid			fdwvalidator;
+	Oid			fdwhandler;
 	List	   *options;		/* fdwoptions as DefElem list */
 } ForeignDataWrapper;
 
@@ -59,6 +61,12 @@ typedef struct UserMapping
 	List	   *options;		/* useoptions as DefElem list */
 } UserMapping;
 
+typedef struct ForeignTable
+{
+	Oid			relid;			/* relation Oid */
+	Oid			serverid;		/* server Oid */
+	List	   *options;		/* ftoptions as DefElem list */
+} ForeignTable;
 
 extern ForeignServer *GetForeignServer(Oid serverid);
 extern ForeignServer *GetForeignServerByName(const char *name, bool missing_ok);
@@ -68,5 +76,9 @@ extern ForeignDataWrapper *GetForeignDataWrapper(Oid fdwid);
 extern ForeignDataWrapper *GetForeignDataWrapperByName(const char *name,
 							bool missing_ok);
 extern Oid	GetForeignDataWrapperOidByName(const char *name, bool missing_ok);
+extern ForeignTable *GetForeignTable(Oid relid);
+extern FdwRoutine *GetFdwRoutineByRelId(Oid relid);
+extern FdwRoutine *GetFdwRoutine(Oid fdwhandler);
+extern bool IsForeignTable(Oid relid);
 
 #endif   /* FOREIGN_H */

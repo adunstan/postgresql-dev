@@ -17,6 +17,7 @@
 #include <math.h>
 
 #include "catalog/pg_operator.h"
+#include "foreign/foreign.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/clauses.h"
@@ -1417,6 +1418,33 @@ create_worktablescan_path(PlannerInfo *root, RelOptInfo *rel)
 	cost_ctescan(pathnode, root, rel);
 
 	return pathnode;
+}
+
+/*
+ * create_foreignscan_path
+ *	  Creates a path corresponding to a scan of a foreign table,
+ *	  returning the pathnode.
+ */
+Path *
+create_foreignscan_path(PlannerInfo *root, RelOptInfo *rel)
+{
+	RangeTblEntry  *rte;
+	FdwRoutine	   *routine;
+	ForeignPath	   *pathnode = makeNode(ForeignPath);
+
+	pathnode->path.pathtype = T_ForeignScan;
+	pathnode->path.parent = rel;
+	pathnode->path.pathkeys = NIL;	/* result is always unordered */
+	
+	rte = planner_rt_fetch(rel->relid, root);
+	routine = GetFdwRoutineByRelId(rte->relid);
+	pathnode->fplan = routine->PlanRelScan(rte->relid, root, rel);
+
+	/* use costs estimated by FDW */
+	pathnode->path.startup_cost = pathnode->fplan->startup_cost;
+	pathnode->path.total_cost = pathnode->fplan->total_cost;
+
+	return (Path *) pathnode;
 }
 
 /*

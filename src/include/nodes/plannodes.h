@@ -15,6 +15,7 @@
 #define PLANNODES_H
 
 #include "access/sdir.h"
+#include "foreign/fdwapi.h"
 #include "nodes/bitmapset.h"
 #include "nodes/primnodes.h"
 #include "storage/itemptr.h"
@@ -433,6 +434,16 @@ typedef struct WorkTableScan
 	Scan		scan;
 	int			wtParam;		/* ID of Param representing work table */
 } WorkTableScan;
+
+/* ----------------
+ *		ForeignScan node
+ * ----------------
+ */
+typedef struct ForeignScan
+{
+	Scan			scan;
+	FdwPlan		   *fplan;
+} ForeignScan;
 
 
 /*

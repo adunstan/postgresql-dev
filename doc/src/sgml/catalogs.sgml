@@ -2823,6 +2823,17 @@
      </row>
 
      <row>
+      <entry><structfield>fdwhandler</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry><literal><link linkend="catalog-pg-proc"><structname>pg_proc</structname></link>.oid</literal></entry>
+      <entry>
+       References a handler function that is responsible for
+       supplying foreign-data wrapper routines.
+       Zero if no handler is provided.
+      </entry>
+     </row>
+
+     <row>
       <entry><structfield>fdwacl</structfield></entry>
       <entry><type>aclitem[]</type></entry>
       <entry></entry>

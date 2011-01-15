@@ -421,6 +421,7 @@ typedef struct _fdwInfo
 	DumpableObject dobj;
 	char	   *rolname;
 	char	   *fdwvalidator;
+	char	   *fdwhandler;
 	char	   *fdwoptions;
 	char	   *fdwacl;
 } FdwInfo;

@@ -17,6 +17,7 @@
 
 #include <math.h>
 
+#include "foreign/foreign.h"
 #include "nodes/nodeFuncs.h"
 #ifdef OPTIMIZER_DEBUG
 #include "nodes/print.h"
@@ -255,14 +256,22 @@ set_plain_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 	 * least one dimension of cost or sortedness.
 	 */
 
-	/* Consider sequential scan */
-	add_path(rel, create_seqscan_path(root, rel));
+	if (IsForeignTable(rte->relid))
+	{
+		/* only foreign scan path is applyable to foreign table */
+		add_path(rel, create_foreignscan_path(root, rel));
+	}
+	else
+	{
+		/* Consider sequential scan */
+		add_path(rel, create_seqscan_path(root, rel));
 
-	/* Consider index scans */
-	create_index_paths(root, rel);
+		/* Consider index scans */
+		create_index_paths(root, rel);
 
-	/* Consider TID scans */
-	create_tidscan_paths(root, rel);
+		/* Consider TID scans */
+		create_tidscan_paths(root, rel);
+	}
 
 	/* Now find the cheapest of the paths for this rel */
 	set_cheapest(rel);
@@ -1502,6 +1511,9 @@ print_path(PlannerInfo *root, Path *path, int indent)
 			break;
 		case T_TidPath:
 			ptype = "TidScan";
+			break;
+		case T_ForeignPath:
+			ptype = "ForeignScan";
 			break;
 		case T_AppendPath:
 			ptype = "Append";
