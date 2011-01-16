@@ -117,6 +117,9 @@ typedef struct CopyStateData
 	bool	   *force_quote_flags;		/* per-column CSV FQ flags */
 	bool	   *force_notnull_flags;	/* per-column CSV FNN flags */
 
+	/* param from FDW */
+	bool       text_array;      /* scan to a single text array field */
+
 	/* these are just for error messages, see CopyFromErrorCallback */
 	const char *cur_relname;	/* table name for error messages */
 	int			cur_lineno;		/* line number for error messages */
@@ -970,6 +973,14 @@ BeginCopy(bool is_from,
 						 errmsg("argument to option \"%s\" must be a list of column names",
 								defel->defname)));
 		}
+		else if (strcmp(defel->defname, "textarray") == 0)
+		{
+			if (cstate->text_array)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			cstate->text_array = defGetBoolean(defel);
+		}
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -1109,6 +1120,12 @@ BeginCopy(bool is_from,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("CSV quote character must not appear in the NULL specification")));
 
+	/* check textarray */
+	if (cstate->text_array && !is_from)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+			  errmsg("textarray only available in read mode")));
+
 	if (rel)
 	{
 		Assert(!raw_query);
@@ -1200,6 +1217,19 @@ BeginCopy(bool is_from,
 	cstate->attnumlist = CopyGetAttnums(tupDesc, cstate->rel, attnamelist);
 
 	num_phys_attrs = tupDesc->natts;
+
+	/* make sure rel has the right shape for textarray */
+	if (cstate->text_array)
+	{
+		if (num_phys_attrs != 1)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("too many  columns for textarray")));
+		if (tupDesc->attrs[0]->atttypid != TEXTARRAYOID)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("target column must be of type text[] for textarray")));				
+	}
 
 	/* Convert FORCE QUOTE name list to per-column flags, check validity */
 	cstate->force_quote_flags = (bool *) palloc0(num_phys_attrs * sizeof(bool));
@@ -2283,7 +2313,7 @@ NextCopyFrom(CopyState cstate)
 				fldct = CopyReadAttributesText(cstate);
 
 			/* check for overflowing fields */
-			if (nfields > 0 && fldct > nfields)
+			if (nfields > 0 && fldct > nfields && !cstate->text_array)
 				ereport(ERROR,
 						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
 						 errmsg("extra data after last expected column")));
@@ -2319,6 +2349,53 @@ NextCopyFrom(CopyState cstate)
 				}
 			}
 
+			if (cstate->text_array)
+			{
+				Datum      *textvals;
+				bool       *nulls;
+				int        dims[1];
+				int        lbs[1];
+				int        fld;
+				
+				textvals = palloc(fldct * sizeof(Datum));
+				nulls = palloc(fldct * sizeof(bool));
+
+				/* Treat an empty line as having no fields */
+				if (fldct == 1 && field_strings[fld] == NULL && strlen(cstate->nulltext) == 0)
+					fldct = 0;
+
+				dims[0] = fldct;
+				lbs[0] = 1; /* sql arrays typically start at 1 */
+
+				
+				for (fld=0; fld < fldct; fld++)
+				{
+					if (field_strings[fld] == NULL)
+					{
+						nulls[fld] = true;
+					}
+					else
+					{
+						nulls[fld] = false;
+						textvals[fld] = DirectFunctionCall1(textin, PointerGetDatum(field_strings[fld]));
+					}
+				}
+				
+				cstate->values[0] = construct_md_array(textvals,
+											nulls,
+											1,
+											dims,
+											lbs,
+											TEXTOID,-
+											1,
+											false,
+											'i');
+				cstate->nulls[0] = false;
+				cstate->cur_attname = NULL;
+				cstate->cur_attval = NULL;
+			}
+			else
+			{
 			/* Loop to read the user attributes on the line. */
 			foreach(cur, cstate->attnumlist)
 			{
@@ -2350,8 +2427,9 @@ NextCopyFrom(CopyState cstate)
 				cstate->cur_attname = NULL;
 				cstate->cur_attval = NULL;
 			}
+			}
 
-			Assert(fieldno == nfields);
+			Assert(cstate->text_array || fieldno == nfields);
 		}
 		else
 		{

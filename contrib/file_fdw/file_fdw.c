@@ -58,10 +58,11 @@ static struct FileFdwOption valid_options[] = {
 	{ "quote",			ForeignTableRelationId },
 	{ "escape",			ForeignTableRelationId },
 	{ "null",			ForeignTableRelationId },
+	{ "textarray",		ForeignTableRelationId },
 
 	/* FIXME: implement force_not_null option */
 
-	/* Centinel */
+	/* Sentinel */
 	{ NULL,			InvalidOid }
 };
 
@@ -134,6 +135,7 @@ file_fdw_validator(PG_FUNCTION_ARGS)
 	char	   *escape = NULL;
 	char	   *null = NULL;
 	bool		header;
+	bool        textarray;
 
 	/* Only superuser can change generic options of the foreign table */
 	if (catalog == ForeignTableRelationId && !superuser())
@@ -219,6 +221,10 @@ file_fdw_validator(PG_FUNCTION_ARGS)
 						(errcode(ERRCODE_FDW_INVALID_ATTRIBUTE_VALUE),
 						 errmsg("null representation cannot use newline or carriage return")));
 			null = strVal(def->arg);
+		}
+		else if (strcmp(def->defname, "textarray") == 0)
+		{
+			textarray = defGetBoolean(def);
 		}
 	}
 
