@@ -4,7 +4,9 @@
 #define WIN32_ONLY_COMPILER
 #endif
 
+#ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0501
+#endif
 /*
  * Always build with SSPI support. Keep it as a #define in case
  * we want a switch to disable it sometime in the future.
@@ -17,10 +19,14 @@
 #undef mkdir
 
 #undef ERROR
+#ifdef WIN64
+#define _WINSOCK2API_
+#else
 #define _WINSOCKAPI_
-#include <windows.h>
+#endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h>
 #undef small
 #include <process.h>
 #include <signal.h>

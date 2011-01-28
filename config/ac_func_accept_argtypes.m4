@@ -45,8 +45,8 @@ AC_DEFUN([AC_FUNC_ACCEPT_ARGTYPES],
  [AC_CACHE_VAL(ac_cv_func_accept_arg1,dnl
   [AC_CACHE_VAL(ac_cv_func_accept_arg2,dnl
    [AC_CACHE_VAL(ac_cv_func_accept_arg3,dnl
-    [for ac_cv_func_accept_return in 'int' 'unsigned int PASCAL'; do
-      for ac_cv_func_accept_arg1 in 'int' 'unsigned int'; do
+    [for ac_cv_func_accept_return in 'int' 'unsigned int PASCAL' '__int64'; do
+      for ac_cv_func_accept_arg1 in 'int' 'unsigned int' '__int64'; do
        for ac_cv_func_accept_arg2 in 'struct sockaddr *' 'const struct sockaddr *' 'void *'; do
         for ac_cv_func_accept_arg3 in 'int' 'size_t' 'socklen_t' 'unsigned int' 'void'; do
          AC_TRY_COMPILE(
