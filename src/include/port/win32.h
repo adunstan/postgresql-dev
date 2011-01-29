@@ -19,9 +19,7 @@
 #undef mkdir
 
 #undef ERROR
-#ifdef WIN64
-#define _WINSOCK2API_
-#else
+#ifndef WIN64
 #define _WINSOCKAPI_
 #endif
 #include <winsock2.h>
