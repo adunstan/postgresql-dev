@@ -2212,30 +2212,26 @@ BeginCopyFrom(Relation rel,
 }
 
 /*
- * Read next tuple from file for COPY FROM. Return false if no more tuples.
+ * Read raw fields in the next line for COPY FROM in text or csv mode.
+ * Return false if no more lines.
  *
- * values and nulls arrays must be the same length as columns of the
- * relation passed to BeginCopyFrom. Oid of the tuple is returned with
- * tupleOid separately.
+ * An internal buffer is returned via fields, so the caller must not free it.
+ * Since the function returns all fields in the input file, nfields could be
+ * smaller or larger than the number of columns. Oid of the tuple is returned 
+ * with tupleOid separately.
  */
-bool
-NextCopyFrom(CopyState cstate, Datum *values, bool *nulls, Oid *tupleOid)
+  bool
+NextLineCopyFrom(CopyState cstate, char ***fields, int *nfields, Oid *tupleOid)
 {
-	TupleDesc	tupDesc;
-	Form_pg_attribute *attr;
-	AttrNumber	num_phys_attrs,
-				attr_count,
-				num_defaults = cstate->num_defaults;
-	FmgrInfo   *in_functions = cstate->in_functions;
-	Oid		   *typioparams = cstate->typioparams;
-	int			i;
-	int			nfields;
 	char	  **field_strings;
-	bool		isnull;
-	bool		file_has_oids = cstate->file_has_oids;
-	int		   *defmap = cstate->defmap;
-	ExprState **defexprs = cstate->defexprs;
-	ExprContext	*econtext;		/* used for ExecEvalExpr for default atts */
+	ListCell   *cur;
+	int			fldct;
+	int			fieldno;
+	char	   *string;
+	bool		done;
+
+	/* only available for text or csv input */
+	Assert(!cstate->binary);
 
 	/* on input just throw the header line away */
 	if (cstate->cur_lineno == 0 && cstate->header_line)
@@ -2245,26 +2241,8 @@ NextCopyFrom(CopyState cstate, Datum *values, bool *nulls, Oid *tupleOid)
 			return false;	/* done */
 	}
 
-	tupDesc = RelationGetDescr(cstate->rel);
-	attr = tupDesc->attrs;
-	num_phys_attrs = tupDesc->natts;
-	attr_count = list_length(cstate->attnumlist);
-	nfields = file_has_oids ? (attr_count + 1) : attr_count;
-
 	/* XXX: Indentation is not adjusted to keep the patch small. */
 		cstate->cur_lineno++;
-
-		/* Initialize all values for row to NULL */
-		MemSet(values, 0, num_phys_attrs * sizeof(Datum));
-		MemSet(nulls, true, num_phys_attrs * sizeof(bool));
-
-		if (!cstate->binary)
-		{
-			ListCell   *cur;
-			int			fldct;
-			int			fieldno;
-			char	   *string;
-			bool		done;
 
 			/* Actually read the line into memory here */
 			done = CopyReadLine(cstate);
@@ -2283,17 +2261,11 @@ NextCopyFrom(CopyState cstate, Datum *values, bool *nulls, Oid *tupleOid)
 			else
 				fldct = CopyReadAttributesText(cstate);
 
-			/* check for overflowing fields */
-			if (nfields > 0 && fldct > nfields)
-				ereport(ERROR,
-						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
-						 errmsg("extra data after last expected column")));
-
 			fieldno = 0;
 			field_strings = cstate->raw_fields;
 
 			/* Read the OID field if present */
-			if (file_has_oids)
+			if (cstate->file_has_oids)
 			{
 				if (fieldno >= fldct)
 					ereport(ERROR,
@@ -2320,6 +2292,90 @@ NextCopyFrom(CopyState cstate, Datum *values, bool *nulls, Oid *tupleOid)
 				}
 			}
 
+			*fields = &field_strings[fieldno];
+			*nfields = fldct - fieldno;
+
+			/* Loop to read the user attributes on the line. */
+			foreach(cur, cstate->attnumlist)
+			{
+				int			attnum = lfirst_int(cur);
+				int			m = attnum - 1;
+
+				if (fieldno >= fldct)
+					break;
+
+				/*
+				 * FIXME: force_notnull_flags won't work for extra columsn
+				 * because we cannot specify it for unnamed columns...
+				 */
+				if (cstate->csv_mode && field_strings[fieldno] == NULL &&
+					cstate->force_notnull_flags[m])
+				{
+					/* Go ahead and read the NULL string */
+					field_strings[fieldno] = cstate->null_print;
+				}
+
+				fieldno++;
+			}
+	/* XXX: End of only-indentation changes. */
+
+	return true;
+}
+
+/*
+ * Read next tuple from file for COPY FROM. Return false if no more tuples.
+ *
+ * values and nulls arrays must be the same length as columns of the
+ * relation passed to BeginCopyFrom. Oid of the tuple is returned with
+ * tupleOid separately.
+ */
+bool
+NextCopyFrom(CopyState cstate, Datum *values, bool *nulls, Oid *tupleOid)
+{
+	TupleDesc	tupDesc;
+	Form_pg_attribute *attr;
+	AttrNumber	num_phys_attrs,
+				attr_count,
+				num_defaults = cstate->num_defaults;
+	FmgrInfo   *in_functions = cstate->in_functions;
+	Oid		   *typioparams = cstate->typioparams;
+	int			i;
+	bool		isnull;
+	bool		file_has_oids = cstate->file_has_oids;
+	int		   *defmap = cstate->defmap;
+	ExprState **defexprs = cstate->defexprs;
+	ExprContext	*econtext;		/* used for ExecEvalExpr for default atts */
+
+	tupDesc = RelationGetDescr(cstate->rel);
+	attr = tupDesc->attrs;
+	num_phys_attrs = tupDesc->natts;
+	attr_count = list_length(cstate->attnumlist);
+
+	/* XXX: Indentation is not adjusted to keep the patch small. */
+		/* Initialize all values for row to NULL */
+		MemSet(values, 0, num_phys_attrs * sizeof(Datum));
+		MemSet(nulls, true, num_phys_attrs * sizeof(bool));
+
+		if (!cstate->binary)
+		{
+			char	  **field_strings;
+			ListCell   *cur;
+			int			fldct;
+			int			fieldno;
+			char	   *string;
+
+			/* read raw fields in the next line */
+			if (!NextLineCopyFrom(cstate, &field_strings, &fldct, tupleOid))
+				return false;
+
+			/* check for overflowing fields */
+			if (attr_count > 0 && fldct > attr_count)
+				ereport(ERROR,
+						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+						 errmsg("extra data after last expected column")));
+
+			fieldno = 0;
+
 			/* Loop to read the user attributes on the line. */
 			foreach(cur, cstate->attnumlist)
 			{
@@ -2333,13 +2389,6 @@ NextCopyFrom(CopyState cstate, Datum *values, bool *nulls, Oid *tupleOid)
 									NameStr(attr[m]->attname))));
 				string = field_strings[fieldno++];
 
-				if (cstate->csv_mode && string == NULL &&
-					cstate->force_notnull_flags[m])
-				{
-					/* Go ahead and read the NULL string */
-					string = cstate->null_print;
-				}
-
 				cstate->cur_attname = NameStr(attr[m]->attname);
 				cstate->cur_attval = string;
 				values[m] = InputFunctionCall(&in_functions[m],
@@ -2352,13 +2401,15 @@ NextCopyFrom(CopyState cstate, Datum *values, bool *nulls, Oid *tupleOid)
 				cstate->cur_attval = NULL;
 			}
 
-			Assert(fieldno == nfields);
+			Assert(fieldno == attr_count);
 		}
 		else
 		{
 			/* binary */
 			int16		fld_count;
 			ListCell   *cur;
+
+			cstate->cur_lineno++;
 
 			if (!CopyGetInt16(cstate, &fld_count))
 			{

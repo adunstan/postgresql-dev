@@ -28,6 +28,8 @@ extern CopyState BeginCopyFrom(Relation rel, const char *filename,
 extern void EndCopyFrom(CopyState cstate);
 extern bool NextCopyFrom(CopyState cstate,
 						 Datum *values, bool *nulls, Oid *tupleOid);
+extern bool NextLineCopyFrom(CopyState cstate,
+							 char ***fields, int *nfields, Oid *tupleOid);
 extern void CopyFromErrorCallback(void *arg);
 
 extern DestReceiver *CreateCopyDestReceiver(void);
