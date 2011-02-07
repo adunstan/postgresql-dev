@@ -1,0 +1,123 @@
+<!-- doc/src/sgml/file-fdw.sgml -->
+
+<sect1 id="file-fdw">
+ <title>file_fdw</title>
+
+ <indexterm zone="file-fdw">
+  <primary>file_fdw</primary>
+ </indexterm>
+
+ <para>
+  The <filename>file_fdw</> module provides foreign-data wrapper
+  <function>file_fdw</function> which can be used to access
+  files on the server-side with format accepted by
+  <command>COPY FROM</command>.
+ </para>
+
+ <sect2>
+  <title>Functions</title>
+
+  <variablelist>
+
+   <varlistentry>
+    <term>
+     <function>file_fdw_validator(text[], oid) returns bool</function>
+    </term>
+
+    <listitem>
+     <para>
+      <function>file_fdw_validator</function> is a validator function to
+      validate generic options of file_fdw and related objects.
+     </para>
+     <para>
+      The location of data file is specified in <literal>filename</literal>
+      generic option of the foreign table.
+      Options valid for <command>COPY FROM</command> can be specified in
+      generic options of the foreign table, other than
+      <literal>force_not_null</literal> and oids.
+      The <literal>force_not_null</literal> must be specified in generic
+      option of the column of the foreign table with boolean value.
+      The <literal>oids</literal> is not supported in file_fdw.
+     </para>
+     <para>
+      All of foreign-data wrapper, server or user mapping accepts no generic
+      option.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>
+     <function>file_fdw_handler() returns fdw_handler</function>
+    </term>
+
+    <listitem>
+     <para>
+      <function>file_fdw_handler</function> is a foreign-data wrapper
+      handler function which returns foreign-data wrapper handler for
+      <command>COPY FROM</command> files in type of <type>fdw_handler</type>.
+      Since fdw_hanlder is a pseudo type, file_fdw_handler can't be
+      called from a SQL statement.
+     </para>
+     <para>
+      This handler opens the data file pointed by the generic option
+      <literal>filename</literal>, and read records from the file along the
+      format specified with other generic options.  The result tuples
+      are returned to backend one by one, so the memory usage would not depend
+      on the size of the file.
+     </para>
+    </listitem>
+   </varlistentry>
+
+  </variablelist>
+
+ </sect2>
+
+ <sect2>
+  <title>Details of file_fdw</title>
+
+  <sect3>
+   <title>Table-level options</title>
+   <para>
+    Changing table-level options requires superuser privilege for security reason.
+    Non-superuser can't change any table-level option even if the user is the
+    owner of the table.  This restriction is essentially for 'filename' option, but
+    currently applied to all table-level options.
+   </para>
+  </sect3>
+
+  <sect3>
+   <title>Connection management</title>
+   <para>
+    The file_fdw doesn't use any connection, so ConnectServer and
+    FreeFSConnection is not implemented.
+   </para>
+  </sect3>
+
+  <sect3>
+   <title>Cost estimation</title>
+   <para>
+    The file_fdw estimates the costs of scanning with the size of the file.
+   </para>
+  </sect3>
+
+  <sect3>
+   <title>WHERE clause push-down</title>
+   <para>
+    The file_fdw can't push down any WHERE clause, so it always reads all of
+    the records for each scan.  If the plan requires to rescan the table,
+    file_fdw resets the read-pointer and reads the whole of the file again.
+   </para>
+  </sect3>
+
+  <sect3>
+   <title>EXPLAIN VERBOSE</title>
+   <para>
+    EXPLAIN VERBOSE on the foreign table which uses file_fdw shows the name and
+    the size of the data file.
+   </para>
+  </sect3>
+
+ </sect2>
+
+</sect1>
