@@ -17,8 +17,10 @@
 #include "access/genam.h"
 #include "access/heapam.h"
 #include "access/skey.h"
+#include "foreign/fdwapi.h"
 #include "nodes/params.h"
 #include "nodes/plannodes.h"
+#include "nodes/relation.h"
 #include "nodes/tidbitmap.h"
 #include "utils/hsearch.h"
 #include "utils/rel.h"
@@ -1401,6 +1403,20 @@ typedef struct WorkTableScanState
 	ScanState	ss;				/* its first field is NodeTag */
 	RecursiveUnionState *rustate;
 } WorkTableScanState;
+
+/* ----------------
+ *	 ForeignScanState information
+ *
+ *		ForeignScan nodes are used to scan the foreign table managed by
+ *		a foreign server.
+ * ----------------
+ */
+typedef struct ForeignScanState
+{
+	ScanState		ss;			/* its first field is NodeTag */
+	FdwRoutine	   *routine;
+	FdwExecutionState *fstate;	/* private data for each data wrapper */
+} ForeignScanState;
 
 /* ----------------------------------------------------------------
  *				 Join State Information

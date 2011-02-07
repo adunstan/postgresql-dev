@@ -195,6 +195,8 @@ TABLE { [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ] |
    or <literal>FOR SHARE</literal> requires
    <literal>UPDATE</literal> privilege as well (for at least one column
    of each table so selected).
+   So you cannot lock contents of a foreign table because only SELECT
+   privilege can be granted on foreign tables.
   </para>
  </refsect1>
 

@@ -108,7 +108,8 @@ LOCK [ TABLE ] [ ONLY ] <replaceable class="PARAMETER">name</replaceable> [, ...
     <term><replaceable class="PARAMETER">name</replaceable></term>
     <listitem>
      <para>
-      The name (optionally schema-qualified) of an existing table to
+      The name (optionally schema-qualified) of an existing table
+      or a existing foreign table to
       lock.  If <literal>ONLY</> is specified, only that table is
       locked.  If <literal>ONLY</> is not specified, the table and all
       its descendant tables (if any) are locked.

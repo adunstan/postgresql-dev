@@ -79,6 +79,11 @@ lnext:
 		if (node->lr_epqstate.estate != NULL)
 			EvalPlanQualSetTuple(&node->lr_epqstate, erm->rti, NULL);
 
+		/* if foreign table, the tuple can't be locked */
+		if (erm->relation->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+			ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					(errmsg("SELECT FOR UPDATE/SHARE is not allowed with foreign tables"))));
+
 		/* if child rel, must check whether it produced this row */
 		if (erm->rti != erm->prti)
 		{

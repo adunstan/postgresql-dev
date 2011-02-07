@@ -5972,6 +5972,7 @@ getForeignDataWrappers(int *numForeignDataWrappers)
 	int			i_fdwname;
 	int			i_rolname;
 	int			i_fdwvalidator;
+	int			i_fdwhandler;
 	int			i_fdwacl;
 	int			i_fdwoptions;
 
@@ -5985,13 +5986,27 @@ getForeignDataWrappers(int *numForeignDataWrappers)
 	/* Make sure we are in proper schema */
 	selectSourceSchema("pg_catalog");
 
-	appendPQExpBuffer(query, "SELECT tableoid, oid, fdwname, "
-		"(%s fdwowner) AS rolname, fdwvalidator::pg_catalog.regproc, fdwacl,"
-					  "array_to_string(ARRAY("
-		 "		SELECT option_name || ' ' || quote_literal(option_value) "
-	   "		FROM pg_options_to_table(fdwoptions)), ', ') AS fdwoptions "
-					  "FROM pg_foreign_data_wrapper",
-					  username_subquery);
+	if (g_fout->remoteVersion >= 90100)
+	{
+		appendPQExpBuffer(query, "SELECT tableoid, oid, fdwname, "
+			"(%s fdwowner) AS rolname, fdwvalidator::pg_catalog.regproc, "
+			"fdwhandler::pg_catalog.regproc, fdwacl,"
+						  "array_to_string(ARRAY("
+			 "		SELECT option_name || ' ' || quote_literal(option_value) "
+		   "		FROM pg_options_to_table(fdwoptions)), ', ') AS fdwoptions "
+						  "FROM pg_foreign_data_wrapper",
+						  username_subquery);
+	}
+	else
+	{
+		appendPQExpBuffer(query, "SELECT tableoid, oid, fdwname, "
+			"(%s fdwowner) AS rolname, fdwvalidator::pg_catalog.regproc, fdwacl,"
+						  "array_to_string(ARRAY("
+			 "		SELECT option_name || ' ' || quote_literal(option_value) "
+		   "		FROM pg_options_to_table(fdwoptions)), ', ') AS fdwoptions "
+						  "FROM pg_foreign_data_wrapper",
+						  username_subquery);
+	}
 
 	res = PQexec(g_conn, query->data);
 	check_sql_result(res, g_conn, query->data, PGRES_TUPLES_OK);
@@ -6006,6 +6021,8 @@ getForeignDataWrappers(int *numForeignDataWrappers)
 	i_fdwname = PQfnumber(res, "fdwname");
 	i_rolname = PQfnumber(res, "rolname");
 	i_fdwvalidator = PQfnumber(res, "fdwvalidator");
+	if (g_fout->remoteVersion >= 90100)
+		i_fdwhandler = PQfnumber(res, "fdwhandler");
 	i_fdwacl = PQfnumber(res, "fdwacl");
 	i_fdwoptions = PQfnumber(res, "fdwoptions");
 
@@ -6019,6 +6036,10 @@ getForeignDataWrappers(int *numForeignDataWrappers)
 		fdwinfo[i].dobj.namespace = NULL;
 		fdwinfo[i].rolname = strdup(PQgetvalue(res, i, i_rolname));
 		fdwinfo[i].fdwvalidator = strdup(PQgetvalue(res, i, i_fdwvalidator));
+		if (g_fout->remoteVersion >= 90100)
+			fdwinfo[i].fdwhandler = strdup(PQgetvalue(res, i, i_fdwhandler));
+		else
+			fdwinfo[i].fdwhandler = NULL;
 		fdwinfo[i].fdwoptions = strdup(PQgetvalue(res, i, i_fdwoptions));
 		fdwinfo[i].fdwacl = strdup(PQgetvalue(res, i, i_fdwacl));
 
@@ -10323,6 +10344,11 @@ dumpForeignDataWrapper(Archive *fout, FdwInfo *fdwinfo)
 	if (fdwinfo->fdwvalidator && strcmp(fdwinfo->fdwvalidator, "-") != 0)
 		appendPQExpBuffer(q, " VALIDATOR %s",
 						  fdwinfo->fdwvalidator);
+
+	if (g_fout->remoteVersion >= 90100 && fdwinfo->fdwhandler &&
+		strcmp(fdwinfo->fdwhandler, "-") != 0)
+		appendPQExpBuffer(q, " HANDLER %s",
+						  fdwinfo->fdwhandler);
 
 	if (fdwinfo->fdwoptions && strlen(fdwinfo->fdwoptions) > 0)
 		appendPQExpBuffer(q, " OPTIONS (%s)", fdwinfo->fdwoptions);

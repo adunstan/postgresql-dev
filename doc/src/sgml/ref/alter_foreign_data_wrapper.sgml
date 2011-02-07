@@ -23,6 +23,7 @@ PostgreSQL documentation
 <synopsis>
 ALTER FOREIGN DATA WRAPPER <replaceable class="parameter">name</replaceable>
     [ VALIDATOR <replaceable class="parameter">valfunction</replaceable> | NO VALIDATOR ]
+    [ HANDLER <replaceable class="parameter">handler</replaceable> | NO HANDLER ]
     [ OPTIONS ( [ ADD | SET | DROP ] <replaceable class="PARAMETER">option</replaceable> ['<replaceable class="PARAMETER">value</replaceable>'] [, ... ]) ]
 ALTER FOREIGN DATA WRAPPER <replaceable class="parameter">name</replaceable> OWNER TO <replaceable>new_owner</replaceable>
 </synopsis>
@@ -86,6 +87,29 @@ ALTER FOREIGN DATA WRAPPER <replaceable class="parameter">name</replaceable> OWN
    </varlistentry>
 
    <varlistentry>
+    <term><literal>HANDLER <replaceable class="parameter">handler</replaceable></literal></term>
+    <listitem>
+     <para>
+      Specifies a new foreign-data wrapper handler function.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>NO HANDLER</literal></term>
+    <listitem>
+     <para>
+      This is used to specify that the foreign-data wrapper should no
+      longer have a handler function.
+     </para>
+     <para>
+      Note that foreign tables which uses a foreign-data wrapper with no
+      handler can't be used in a SELECT statement.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><literal>OPTIONS ( [ ADD | SET | DROP ] <replaceable class="PARAMETER">option</replaceable> ['<replaceable class="PARAMETER">value</replaceable>'] [, ... ] )</literal></term>
     <listitem>
      <para>
@@ -127,8 +151,8 @@ ALTER FOREIGN DATA WRAPPER dbi VALIDATOR bob.myvalidator;
   <para>
    <command>ALTER FOREIGN DATA WRAPPER</command> conforms to ISO/IEC
    9075-9 (SQL/MED).  The standard does not specify the <literal>
-   VALIDATOR</literal> and <literal>OWNER TO</> variants of the
-   command.
+   VALIDATOR</literal>, <literal>HANDLER</> and <literal>OWNER TO</>
+   variants of the command.
   </para>
  </refsect1>
 

@@ -548,6 +548,42 @@ _copyWorkTableScan(WorkTableScan *from)
 }
 
 /*
+ * _copyForeignScan
+ */
+static ForeignScan *
+_copyForeignScan(ForeignScan *from)
+{
+	ForeignScan *newnode = makeNode(ForeignScan);
+
+	/*
+	 * copy node superclass fields
+	 */
+	CopyScanFields((Scan *) from, (Scan *) newnode);
+	COPY_NODE_FIELD(fplan);
+
+	return newnode;
+}
+
+/*
+ * _copyFdwPlan
+ */
+static FdwPlan *
+_copyFdwPlan(FdwPlan *from)
+{
+	FdwPlan *newnode = makeNode(FdwPlan);
+
+	/*
+	 * copy node superclass fields
+	 */
+	COPY_STRING_FIELD(explainInfo);
+	COPY_SCALAR_FIELD(startup_cost);
+	COPY_SCALAR_FIELD(total_cost);
+	COPY_NODE_FIELD(fdw_private);
+
+	return newnode;
+}
+
+/*
  * CopyJoinFields
  *
  *		This function copies the fields of the Join node.  It is used by
@@ -3202,7 +3238,7 @@ _copyCreateFdwStmt(CreateFdwStmt *from)
 	CreateFdwStmt *newnode = makeNode(CreateFdwStmt);
 
 	COPY_STRING_FIELD(fdwname);
-	COPY_NODE_FIELD(validator);
+	COPY_NODE_FIELD(func_options);
 	COPY_NODE_FIELD(options);
 
 	return newnode;
@@ -3214,8 +3250,7 @@ _copyAlterFdwStmt(AlterFdwStmt *from)
 	AlterFdwStmt *newnode = makeNode(AlterFdwStmt);
 
 	COPY_STRING_FIELD(fdwname);
-	COPY_NODE_FIELD(validator);
-	COPY_SCALAR_FIELD(change_validator);
+	COPY_NODE_FIELD(func_options);
 	COPY_NODE_FIELD(options);
 
 	return newnode;
@@ -3759,6 +3794,12 @@ copyObject(void *from)
 			break;
 		case T_WorkTableScan:
 			retval = _copyWorkTableScan(from);
+			break;
+		case T_ForeignScan:
+			retval = _copyForeignScan(from);
+			break;
+		case T_FdwPlan:
+			retval = _copyFdwPlan(from);
 			break;
 		case T_Join:
 			retval = _copyJoin(from);

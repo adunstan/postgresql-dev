@@ -129,8 +129,9 @@ ROLLBACK;
       Display additional information regarding the plan.  Specifically, include
       the output column list for each node in the plan tree, schema-qualify
       table and function names, always label variables in expressions with
-      their range table alias, and always print the name of each trigger for
-      which statistics are displayed.  This parameter defaults to
+      their range table alias, always print the name of each trigger for
+      which statistics are displayed, and print FDW-specific information for
+      each ForeignScan node in the plan tree.  This parameter defaults to
       <literal>FALSE</literal>.
      </para>
     </listitem>

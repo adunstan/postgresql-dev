@@ -16,6 +16,7 @@
 #include "catalog/namespace.h"
 #include "catalog/pg_foreign_data_wrapper.h"
 #include "catalog/pg_foreign_server.h"
+#include "catalog/pg_foreign_table.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_user_mapping.h"
 #include "foreign/foreign.h"
@@ -59,6 +60,7 @@ GetForeignDataWrapper(Oid fdwid)
 	fdw->owner = fdwform->fdwowner;
 	fdw->fdwname = pstrdup(NameStr(fdwform->fdwname));
 	fdw->fdwvalidator = fdwform->fdwvalidator;
+	fdw->fdwhandler = fdwform->fdwhandler;
 
 	/* Extract the options */
 	datum = SysCacheGetAttr(FOREIGNDATAWRAPPEROID,
@@ -247,6 +249,140 @@ GetUserMapping(Oid userid, Oid serverid)
 
 	return um;
 }
+
+
+/*
+ * GetForeignTable - look up the foreign table definition by relation oid.
+ */
+ForeignTable *
+GetForeignTable(Oid relid)
+{
+	Form_pg_foreign_table tableform;
+	ForeignTable *ft;
+	HeapTuple	tp;
+	Datum		datum;
+	bool		isnull;
+
+	tp = SearchSysCache(FOREIGNTABLEREL,
+						ObjectIdGetDatum(relid),
+						0, 0, 0);
+
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "cache lookup failed for foreign table %u", relid);
+
+	tableform = (Form_pg_foreign_table) GETSTRUCT(tp);
+
+	ft = palloc(sizeof(ForeignTable));
+	ft->relid = relid;
+	ft->serverid = tableform->ftserver;
+
+	/* Extract the ftoptions */
+	datum = SysCacheGetAttr(FOREIGNTABLEREL,
+							tp,
+							Anum_pg_foreign_table_ftoptions,
+							&isnull);
+
+	/* untransformRelOptions does exactly what we want - avoid duplication */
+	ft->options = untransformRelOptions(datum);
+	ReleaseSysCache(tp);
+
+	return ft;
+}
+
+
+/*
+ * GetFdwRoutine - look up the handler of the foreign-data wrapper by OID and
+ * retrieve FdwRoutine.
+ */
+FdwRoutine *
+GetFdwRoutine(Oid fdwhandler)
+{
+	FmgrInfo				flinfo;
+	FunctionCallInfoData	fcinfo;
+	Datum					result;
+	FdwRoutine			   *routine;
+
+	if (fdwhandler == InvalidOid)
+		elog(ERROR, "foreign-data wrapper has no handler");
+
+	fmgr_info(fdwhandler, &flinfo);
+	InitFunctionCallInfoData(fcinfo, &flinfo, 0, NULL, NULL);
+	result = FunctionCallInvoke(&fcinfo);
+
+	if (fcinfo.isnull ||
+		(routine = (FdwRoutine *) DatumGetPointer(result)) == NULL)
+	{
+		elog(ERROR, "function %u returned NULL", flinfo.fn_oid);
+		routine = NULL;	/* keep compiler quiet */
+	}
+
+	return routine;
+}
+
+
+/*
+ * GetFdwRoutineByRelId - look up the handler of the foreign-data wrapper by
+ * OID of the foreign table and retrieve FdwRoutine.
+ */
+FdwRoutine *
+GetFdwRoutineByRelId(Oid relid)
+{
+	HeapTuple				tp;
+	Form_pg_foreign_data_wrapper fdwform;
+	Form_pg_foreign_server	serverform;
+	Form_pg_foreign_table	tableform;
+	Oid						serverid;
+	Oid						fdwid;
+	Oid						fdwhandler;
+
+	/* Get function OID for the foreign table. */
+	tp = SearchSysCache1(FOREIGNTABLEREL, ObjectIdGetDatum(relid));
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "cache lookup failed for foreign table %u", relid);
+	tableform = (Form_pg_foreign_table) GETSTRUCT(tp);
+	serverid = tableform->ftserver;
+	ReleaseSysCache(tp);
+
+	tp = SearchSysCache1(FOREIGNSERVEROID, ObjectIdGetDatum(serverid));
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "cache lookup failed for foreign server %u", serverid);
+	serverform = (Form_pg_foreign_server) GETSTRUCT(tp);
+	fdwid = serverform->srvfdw;
+	ReleaseSysCache(tp);
+
+	tp = SearchSysCache1(FOREIGNDATAWRAPPEROID, ObjectIdGetDatum(fdwid));
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "cache lookup failed for foreign-data wrapper %u", fdwid);
+	fdwform = (Form_pg_foreign_data_wrapper) GETSTRUCT(tp);
+	fdwhandler = fdwform->fdwhandler;
+	ReleaseSysCache(tp);
+
+	return GetFdwRoutine(fdwhandler);
+}
+
+
+/*
+ * Determine the relation is a foreign table.
+ */
+bool
+IsForeignTable(Oid relid)
+{
+	HeapTuple	tuple;
+	Form_pg_class classForm;
+	char		relkind;
+
+	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+	if (!HeapTupleIsValid(tuple))
+		ereport(ERROR,
+			   (errcode(ERRCODE_UNDEFINED_TABLE),
+				errmsg("relation with OID %u does not exist", relid)));
+	classForm = (Form_pg_class) GETSTRUCT(tuple);
+	relkind = classForm->relkind;
+	ReleaseSysCache(tuple);
+
+	return (relkind == RELKIND_FOREIGN_TABLE);
+}
+
 
 
 /*
