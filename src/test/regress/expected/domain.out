@@ -49,7 +49,7 @@ INSERT INTO basictest values ('88', 'haha', 'short', '123.1212');    -- Truncate
 -- Test copy
 COPY basictest (testvarchar) FROM stdin; -- fail
 ERROR:  value too long for type character varying(5)
-CONTEXT:  COPY basictest, line 1, column testvarchar: "notsoshorttext"
+CONTEXT:  relation basictest, line 1, column testvarchar: "notsoshorttext"
 COPY basictest (testvarchar) FROM stdin;
 select * from basictest;
  testint4 | testtext | testvarchar | testnumeric 
@@ -130,7 +130,7 @@ select testint4arr[1], testchar4arr[2:2] from domarrtest;
 COPY domarrtest FROM stdin;
 COPY domarrtest FROM stdin;	-- fail
 ERROR:  value too long for type character varying(4)
-CONTEXT:  COPY domarrtest, line 1, column testchar4arr: "{qwerty,w,e}"
+CONTEXT:  relation domarrtest, line 1, column testchar4arr: "{qwerty,w,e}"
 select * from domarrtest;
   testint4arr  |    testchar4arr     
 ---------------+---------------------
@@ -173,14 +173,14 @@ INSERT INTO nulltest values ('a', 'b', 'c', NULL, 'd'); -- Good
 -- Test copy
 COPY nulltest FROM stdin; --fail
 ERROR:  null value in column "col3" violates not-null constraint
-CONTEXT:  COPY nulltest, line 1: "a	b	\N	d	d"
+CONTEXT:  relation nulltest, line 1: "a	b	\N	d	d"
 COPY nulltest FROM stdin; --fail
 ERROR:  domain dcheck does not allow null values
-CONTEXT:  COPY nulltest, line 1, column col5: null input
+CONTEXT:  relation nulltest, line 1, column col5: null input
 -- Last row is bad
 COPY nulltest FROM stdin;
 ERROR:  new row for relation "nulltest" violates check constraint "nulltest_col5_check"
-CONTEXT:  COPY nulltest, line 3: "a	b	c	\N	a"
+CONTEXT:  relation nulltest, line 3: "a	b	c	\N	a"
 select * from nulltest;
  col1 | col2 | col3 | col4 | col5 
 ------+------+------+------+------

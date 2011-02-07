@@ -278,7 +278,7 @@ SELECT '' AS two, * FROM COPY_TBL;
 
 COPY COPY_TBL FROM '@abs_srcdir@/data/constrf.data';
 ERROR:  new row for relation "copy_tbl" violates check constraint "copy_con"
-CONTEXT:  COPY copy_tbl, line 2: "7	check failed	6"
+CONTEXT:  relation copy_tbl, line 2: "7	check failed	6"
 SELECT * FROM COPY_TBL;
  x |       y       | z 
 ---+---------------+---
