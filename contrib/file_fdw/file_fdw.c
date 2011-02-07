@@ -13,6 +13,10 @@
 
 #include "postgres.h"
 
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include "access/reloptions.h"
 #include "catalog/pg_foreign_table.h"
 #include "catalog/pg_foreign_server.h"
@@ -61,7 +65,10 @@ static struct FileFdwOption valid_options[] = {
 
 	/* FIXME: implement force_not_null option */
 
-	/* Centinel */
+	/* Local option */
+	{ "textarray",      ForeignTableRelationId },
+
+	/* Sentinel */
 	{ NULL,			InvalidOid }
 };
 
@@ -70,8 +77,9 @@ static struct FileFdwOption valid_options[] = {
  */
 typedef struct FileFdwPrivate {
 	char		   *filename;
+	bool            textarray;  /* make a text array rather than a tuple */
 	Relation		rel;		/* scan target relation */
-	CopyState		cstate;		/* state of reaind file */
+	CopyState		cstate;		/* state of read in file */
 	List		   *options;	/* merged generic options, excluding filename */
 } FileFdwPrivate;
 
@@ -91,6 +99,8 @@ static void fileIterate(FdwExecutionState *festate, TupleTableSlot *slot);
 static void fileEndScan(FdwExecutionState *festate);
 static void fileReScan(FdwExecutionState *festate);
 
+/* text array support */
+static void makeTextArray(TupleTableSlot *slot, char **raw_fields, int nfields);
 /*
  * Helper functions
  */
@@ -142,7 +152,7 @@ file_fdw_validator(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("only superuser can change foreign table options")));
 
-	/* Vaidate each options */
+	/* Validate each options */
 	foreach(cell, options_list)
 	{
 		DefElem    *def = lfirst(cell);
@@ -298,6 +308,8 @@ filePlanRelScan(Oid foreigntableid, PlannerInfo *root, RelOptInfo *rel)
 {
 	Const		   *relid;
 	Value		   *filename = NULL;
+	bool            textarray = false;
+	Const          *textarray_param;
 	ulong			size;
 	FdwPlan		   *fplan;
 	ForeignTable   *table;
@@ -346,6 +358,30 @@ filePlanRelScan(Oid foreigntableid, PlannerInfo *root, RelOptInfo *rel)
 				(errcode(ERRCODE_FDW_UNABLE_TO_CREATE_REPLY),
 				 errmsg("filename is required for file_fdw scan")));
 
+	/*
+	 * Split textarray option off from the list because it's handled
+	 * here instead of being passed as another parameter to BeginCopyFrom().
+	 */
+	prev = NULL;
+	foreach (lc, options)
+	{
+		DefElem	   *def = lfirst(lc);
+		if (strcmp(def->defname, "textarray") == 0)
+		{
+			textarray = defGetBoolean(def);
+			options = list_delete_cell(options, lc, prev);
+			break;
+		}
+		prev = lc;
+	}
+	textarray_param = (Const *) makeBoolConst(textarray,false);
+
+	if (text_array)
+	{
+		/* make sure the table has one column and it's oy type text[] */
+		/* XXX fill in this piece */
+	}
+	
 	/* Construct FdwPlan and store relid and options in private area */
 	fplan = makeNode(FdwPlan);
 	size = estimate_costs(strVal(filename), rel,
@@ -354,6 +390,7 @@ filePlanRelScan(Oid foreigntableid, PlannerInfo *root, RelOptInfo *rel)
 	fplan->fdw_private = NIL;
 	fplan->fdw_private = lappend(fplan->fdw_private, relid);
 	fplan->fdw_private = lappend(fplan->fdw_private, filename);
+	fplan->fdw_private = lappend(fplan->fdw_private, textarray_param);
 	fplan->fdw_private = lappend(fplan->fdw_private, options);
 
 	return fplan;
@@ -374,6 +411,7 @@ fileBeginScan(FdwPlan *fplan, ParamListInfo params)
 	Const		   *relid_const;
 	Oid				relid;
 	Value		   *filename;
+    Const          *textarray;
 	List		   *options;
 	Relation		rel;
 	CopyState		cstate;
@@ -385,7 +423,8 @@ fileBeginScan(FdwPlan *fplan, ParamListInfo params)
 	/* Get oid of the relation and option list from private area of FdwPlan. */
 	relid_const = list_nth(fplan->fdw_private, 0);
 	filename = list_nth(fplan->fdw_private, 1);
-	options = list_nth(fplan->fdw_private, 2);
+	textarray = list_nth(fplan->fdw_private, 2);
+	options = list_nth(fplan->fdw_private, 3);
 
 	relid = DatumGetObjectId(relid_const->constvalue);
 
@@ -405,6 +444,7 @@ fileBeginScan(FdwPlan *fplan, ParamListInfo params)
 	festate = palloc0(sizeof(FdwExecutionState));
 	fdw_private = palloc0(sizeof(FileFdwPrivate));
 	fdw_private->filename = strVal(filename);
+	fdw_private->textarray = textarray->constvalue;
 	fdw_private->rel = rel;
 	fdw_private->cstate = cstate;
 	fdw_private->options = options;
@@ -438,8 +478,22 @@ fileIterate(FdwExecutionState *festate, TupleTableSlot *slot)
 	 * EOF.
 	 */
 	ExecClearTuple(slot);
-	found = NextCopyFrom(fdw_private->cstate, slot->tts_values, slot->tts_isnull,
-						 NULL);
+	if (fdw_private->textarray)
+	{
+		char **raw_fields;
+		int nfields;
+		
+		found = NextLineCopyFrom(fdw_private->cstate, &raw_fields, &nfields,
+							 NULL);
+		if (found)
+			makeTextArray(slot, raw_fields, nfields);
+	}
+	else
+	{
+		/* let the COPY code do the work */
+		found = NextCopyFrom(fdw_private->cstate, slot->tts_values, 
+							 slot->tts_isnull, NULL);
+	}
 	if (found)
 		ExecStoreVirtualTuple(slot);
 
@@ -546,3 +600,8 @@ estimate_costs(const char *filename, RelOptInfo *baserel,
 	return stat_buf.st_size;
 }
 
+static void 
+makeTextArray(TupleTableSlot *slot, char **raw_fields, int nfields)
+{
+	
+}
