@@ -67,10 +67,19 @@ CREATE FOREIGN TABLE agg_bad (
 ) SERVER file_server
 OPTIONS (format 'csv', filename '@abs_srcdir@/data/agg.bad', header 'true', delimiter ';', quote '@', escape '"', null '');
 
+CREATE FOREIGN TABLE jagged_text (
+	t	text[]
+) SERVER file_server
+OPTIONS (format 'csv', filename '@abs_srcdir@/data/jagged.csv', header 'true', textarray 'true');
+
 -- basic query tests
 SELECT * FROM agg_text WHERE b > 10.0 ORDER BY a;
 SELECT * FROM agg_csv ORDER BY a;
 SELECT * FROM agg_csv c JOIN agg_text t ON (t.a = c.a) ORDER BY c.a;
+
+-- textarray tests
+SELECT * FROM jagged_text;
+SELECT t[3] AS a, t[1] AS b, t[99] AS c  FROM jagged_text;
 
 -- error context report tests
 SELECT * FROM agg_bad;               -- ERROR

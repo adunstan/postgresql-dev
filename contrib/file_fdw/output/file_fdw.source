@@ -62,6 +62,10 @@ CREATE FOREIGN TABLE agg_bad (
 	b	float4
 ) SERVER file_server
 OPTIONS (format 'csv', filename '@abs_srcdir@/data/agg.bad', header 'true', delimiter ';', quote '@', escape '"', null '');
+CREATE FOREIGN TABLE jagged_text (
+	t	text[]
+) SERVER file_server
+OPTIONS (format 'csv', filename '@abs_srcdir@/data/jagged.csv', header 'true', textarray 'true');
 -- basic query tests
 SELECT * FROM agg_text WHERE b > 10.0 ORDER BY a;
   a  |   b    
@@ -85,6 +89,27 @@ SELECT * FROM agg_csv c JOIN agg_text t ON (t.a = c.a) ORDER BY c.a;
   42 |  324.78 |  42 |  324.78
  100 |  99.097 | 100 |  99.097
 (3 rows)
+
+-- textarray tests
+SELECT * FROM jagged_text;
+                     t                      
+--------------------------------------------
+ {"one field"}
+ {two,fields}
+ {three,NULL,"fields of which one is null"}
+ {"next line has no fields"}
+ {}
+(5 rows)
+
+SELECT t[3] AS a, t[1] AS b, t[99] AS c  FROM jagged_text;
+              a              |            b            | c 
+-----------------------------+-------------------------+---
+                             | one field               | 
+                             | two                     | 
+ fields of which one is null | three                   | 
+                             | next line has no fields | 
+                             |                         | 
+(5 rows)
 
 -- error context report tests
 SELECT * FROM agg_bad;               -- ERROR
@@ -155,7 +180,7 @@ SET ROLE file_fdw_superuser;
 -- cleanup
 RESET ROLE;
 DROP FOREIGN DATA WRAPPER file_fdw CASCADE;
-NOTICE:  drop cascades to 7 other objects
+NOTICE:  drop cascades to 8 other objects
 DETAIL:  drop cascades to server file_server
 drop cascades to user mapping for file_fdw_user
 drop cascades to user mapping for file_fdw_superuser
@@ -163,4 +188,5 @@ drop cascades to user mapping for no_priv_user
 drop cascades to foreign table agg_text
 drop cascades to foreign table agg_csv
 drop cascades to foreign table agg_bad
+drop cascades to foreign table jagged_text
 DROP ROLE IF EXISTS file_fdw_superuser, file_fdw_user, no_priv_user;

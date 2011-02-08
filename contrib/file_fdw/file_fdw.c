@@ -30,6 +30,7 @@
 #include "optimizer/cost.h"
 #include "parser/parsetree.h"
 #include "storage/fd.h"
+#include "utils/array.h"
 #include "utils/builtins.h"
 
 PG_MODULE_MAGIC;
@@ -72,6 +73,7 @@ static struct FileFdwOption valid_options[] = {
 	{ NULL,			InvalidOid }
 };
 
+#define FILE_FDW_TEXTARRAY_STASH_INIT 64
 /*
  * FDW-specific information for FdwExecutionState.
  */
@@ -81,6 +83,10 @@ typedef struct FileFdwPrivate {
 	Relation		rel;		/* scan target relation */
 	CopyState		cstate;		/* state of read in file */
 	List		   *options;	/* merged generic options, excluding filename */
+    /* stash for processing text arrays - not used otherwise */
+	int             text_array_stash_size;
+	Datum          *text_array_values;
+	bool           *text_array_nulls;
 } FileFdwPrivate;
 
 /*
@@ -100,7 +106,8 @@ static void fileEndScan(FdwExecutionState *festate);
 static void fileReScan(FdwExecutionState *festate);
 
 /* text array support */
-static void makeTextArray(TupleTableSlot *slot, char **raw_fields, int nfields);
+static void makeTextArray(FileFdwPrivate *fdw_private,
+						   TupleTableSlot *slot, char **raw_fields, int nfields);
 /*
  * Helper functions
  */
@@ -376,7 +383,7 @@ filePlanRelScan(Oid foreigntableid, PlannerInfo *root, RelOptInfo *rel)
 	}
 	textarray_param = (Const *) makeBoolConst(textarray,false);
 
-	if (text_array)
+	if (textarray)
 	{
 		/* make sure the table has one column and it's oy type text[] */
 		/* XXX fill in this piece */
@@ -450,6 +457,15 @@ fileBeginScan(FdwPlan *fplan, ParamListInfo params)
 	fdw_private->options = options;
 	festate->fdw_private = (void *) fdw_private;
 
+	if (fdw_private->textarray)
+	{
+		fdw_private->text_array_stash_size = FILE_FDW_TEXTARRAY_STASH_INIT;
+		fdw_private->text_array_values =
+			palloc(FILE_FDW_TEXTARRAY_STASH_INIT * sizeof(Datum));
+		fdw_private->text_array_nulls =
+			palloc(FILE_FDW_TEXTARRAY_STASH_INIT * sizeof(bool));
+	}
+
 	return festate;
 }
 
@@ -486,7 +502,7 @@ fileIterate(FdwExecutionState *festate, TupleTableSlot *slot)
 		found = NextLineCopyFrom(fdw_private->cstate, &raw_fields, &nfields,
 							 NULL);
 		if (found)
-			makeTextArray(slot, raw_fields, nfields);
+			makeTextArray(fdw_private, slot, raw_fields, nfields);
 	}
 	else
 	{
@@ -601,7 +617,75 @@ estimate_costs(const char *filename, RelOptInfo *baserel,
 }
 
 static void 
-makeTextArray(TupleTableSlot *slot, char **raw_fields, int nfields)
+makeTextArray(FileFdwPrivate *fdw_private, TupleTableSlot *slot, char **raw_fields, int nfields)
 {
-	
+	Datum     *values;
+	bool      *nulls;
+	int        dims[1];
+	int        lbs[1];
+	int        fld;
+	Datum      result;
+	int        fldct = nfields;
+	char      *string;
+
+	if (nfields == 1 && 
+		raw_fields[0] == NULL  
+		/* fixme - probably need to get this from fdw_private */
+		/* && cstate->null_print_len == 0 */
+		   )
+	{
+		/* Treat an empty line as having no fields */
+		fldct = 0;
+	}	
+	else if (nfields > fdw_private->text_array_stash_size)
+	{
+		while (fdw_private->text_array_stash_size < nfields)
+			fdw_private->text_array_stash_size *= 2;
+
+		fdw_private->text_array_values =repalloc(
+			fdw_private->text_array_values,
+			fdw_private->text_array_stash_size * sizeof(Datum));
+		fdw_private->text_array_nulls =repalloc(
+			fdw_private->text_array_nulls,
+			fdw_private->text_array_stash_size * sizeof(bool));		
+	}
+
+	values = fdw_private->text_array_values;
+	nulls = fdw_private->text_array_nulls;
+
+	dims[0] = fldct;
+	lbs[0] = 1; /* sql arrays typically start at 1 */
+
+	for (fld=0; fld < fldct; fld++)
+	{
+		string = raw_fields[fld];
+
+		if (string == NULL)
+		{
+			values[fld] = PointerGetDatum(NULL);
+			nulls[fld] = true;
+		}
+		else
+		{
+			nulls[fld] = false;
+			values[fld] = PointerGetDatum(
+				DirectFunctionCall1(textin, 
+									PointerGetDatum(string)));
+		}
+	}
+
+	result = PointerGetDatum(construct_md_array(
+								 values, 
+								 nulls,
+								 1,
+								 dims,
+								 lbs,
+								 TEXTOID,
+								 -1,
+								 false,
+								 'i'));
+
+	slot->tts_values[0] = result;
+	slot->tts_isnull[0] = false;
+
 }

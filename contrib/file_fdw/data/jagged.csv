@@ -1,0 +1,6 @@
+header for a file with varying numbers of fields
+one field
+two,fields
+three,,fields of which one is null
+next line has no fields
+
