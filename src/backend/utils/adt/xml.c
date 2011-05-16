@@ -142,6 +142,21 @@ static void SPI_sql_row_to_xmlelement(int rownum, StringInfo result,
 #define NAMESPACE_XSI "http://www.w3.org/2001/XMLSchema-instance"
 #define NAMESPACE_SQLXML "http://standards.iso.org/iso/9075/2003/sqlxml"
 
+/* forbidden C0 control chars */
+#define FORBIDDEN_C0  \
+	"\x01\x02\x03\x04\x05\x06\x07\x08\x0B\x0C\x0E\x0F\x10\x11" \
+	"\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F"
+
+static inline void
+check_forbidden_chars(char * str)
+{
+	if (strpbrk(str,FORBIDDEN_C0) != NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+				 errmsg("character out of range"),
+				 errdetail("XML does not support control characters.")));
+	
+}
 
 #ifdef USE_LIBXML
 
@@ -411,6 +426,8 @@ xmlcomment(PG_FUNCTION_ARGS)
 	appendStringInfoText(&buf, arg);
 	appendStringInfo(&buf, "-->");
 
+	check_forbidden_chars(buf.data);
+	
 	PG_RETURN_XML_P(stringinfo_to_xmltype(&buf));
 #else
 	NO_XML_SUPPORT();
@@ -718,6 +735,8 @@ xmlpi(char *target, text *arg, bool arg_is_null, bool *result_is_null)
 	}
 	appendStringInfoString(&buf, "?>");
 
+	check_forbidden_chars(buf.data);
+	
 	result = stringinfo_to_xmltype(&buf);
 	pfree(buf.data);
 	return result;
@@ -740,6 +759,8 @@ xmlroot(xmltype *data, text *version, int standalone)
 
 	len = VARSIZE(data) - VARHDRSZ;
 	str = text_to_cstring((text *) data);
+
+	check_forbidden_chars(str);
 
 	parse_xml_decl((xmlChar *) str, &len, &orig_version, NULL, &orig_standalone);
 
@@ -1183,6 +1204,9 @@ xml_parse(text *data, XmlOptionType xmloption_arg, bool preserve_whitespace,
 										   len,
 										   encoding,
 										   PG_UTF8);
+
+	/* check for illegal XML chars */
+	check_forbidden_chars((char *) utf8string);
 
 	/* Start up libxml and its parser (no-ops if already done) */
 	pg_xml_init();
@@ -1803,6 +1827,9 @@ map_sql_value_to_xml_value(Datum value, Oid type, bool xml_escape_strings)
 		 */
 		getTypeOutputInfo(type, &typeOut, &isvarlena);
 		str = OidOutputFunctionCall(typeOut, value);
+
+		/* check for illegal XML chars */
+		check_forbidden_chars(str);
 
 		/* ... exactly as-is for XML, and when escaping is not wanted */
 		if (type == XMLOID || !xml_escape_strings)
