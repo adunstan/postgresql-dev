@@ -150,12 +150,37 @@ static void SPI_sql_row_to_xmlelement(int rownum, StringInfo result,
 static inline void
 check_forbidden_chars(char * str)
 {
-	if (strpbrk(str,FORBIDDEN_C0) != NULL)
+	char * errchar;
+
+	if ((errchar = strpbrk(str,FORBIDDEN_C0)) != NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-				 errmsg("character out of range"),
-				 errdetail("XML does not support control characters.")));
-	
+				 errmsg("illegal XML character \\u%.4x", *errchar)));
+
+	if (GetDatabaseEncoding() == PG_UTF8)
+	{
+		int utf8c;
+		int utf8len = 0;
+		while (*str)
+		{
+			if (IS_HIGHBIT_SET(*str))
+			{
+				utf8c = xmlGetUTF8Char(str, &utf8len);
+				str += utf8len;
+				if (! (utf8c < 0xdf00 || (utf8c > 0xdfff && 
+										  utf8c != 0xfffe &&
+										  utf8c != 0xfffe)))
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+							 errmsg("illegal XML character \\u%.4x", utf8c)));
+			}
+			else
+			{
+				/* already checked the forbidden ASCII chars */
+				str++;
+			}
+		}
+	}
 }
 
 #ifdef USE_LIBXML
