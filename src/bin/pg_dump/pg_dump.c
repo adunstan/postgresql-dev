@@ -91,6 +91,7 @@ PGconn	   *g_conn;				/* the database connection */
 /* various user-settable parameters */
 bool		schemaOnly;
 bool		dataOnly;
+int         dumpSections; /* bitmask of chosen sections */
 bool		aclsSkip;
 const char *lockWaitTimeout;
 
@@ -247,7 +248,7 @@ static const char *fmtCopyColumnList(const TableInfo *ti);
 static void do_sql_command(PGconn *conn, const char *query);
 static void check_sql_result(PGresult *res, PGconn *conn, const char *query,
 				 ExecStatusType expected);
-
+static void set_section(const char *arg);
 
 int
 main(int argc, char **argv)
@@ -330,6 +331,7 @@ main(int argc, char **argv)
 		{"quote-all-identifiers", no_argument, &quote_all_identifiers, 1},
 		{"role", required_argument, NULL, 3},
 		{"serializable-deferrable", no_argument, &serializable_deferrable, 1},
+		{"section", required_argument, NULL, 5},
 		{"use-set-session-authorization", no_argument, &use_setsessauth, 1},
 		{"no-security-labels", no_argument, &no_security_labels, 1},
 		{"no-unlogged-table-data", no_argument, &no_unlogged_table_data, 1},
@@ -346,6 +348,7 @@ main(int argc, char **argv)
 	strcpy(g_opaque_type, "opaque");
 
 	dataOnly = schemaOnly = false;
+	dumpSections = DUMP_UNSECTIONED;
 	lockWaitTimeout = NULL;
 
 	progname = get_progname(argv[0]);
@@ -487,6 +490,10 @@ main(int argc, char **argv)
 				use_role = optarg;
 				break;
 
+			case 5:				/* section */
+				set_section(optarg);
+				break;
+
 			default:
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
 				exit(1);
@@ -515,6 +522,22 @@ main(int argc, char **argv)
 	{
 		write_msg(NULL, "options -s/--schema-only and -a/--data-only cannot be used together\n");
 		exit(1);
+	}
+
+	if ((dataOnly || schemaOnly) && dumpSections != DUMP_UNSECTIONED)
+	{
+		write_msg(NULL, "options -s/--schema-only and -a/--data-only cannot be used with --section\n");
+		exit(1);
+	}
+	
+	if (dataOnly)
+		dumpSections = DUMP_DATA;
+	else if (schemaOnly)
+		dumpSections = DUMP_PRE_DATA | DUMP_POST_DATA;
+	else if ( dumpSections != DUMP_UNSECTIONED)
+	{
+		dataOnly = dumpSections == DUMP_DATA;
+		schemaOnly = !(dumpSections & DUMP_DATA);
 	}
 
 	if (dataOnly && outputClean)
@@ -859,6 +882,7 @@ help(const char *progname)
 	printf(_("  --no-tablespaces            do not dump tablespace assignments\n"));
 	printf(_("  --no-unlogged-table-data    do not dump unlogged table data\n"));
 	printf(_("  --quote-all-identifiers     quote all identifiers, even if not key words\n"));
+	printf(_("  --section=SECTION           dump named section (pre-data, data or post-data\n"));
 	printf(_("  --serializable-deferrable   wait until the dump can run without anomalies\n"));
 	printf(_("  --use-set-session-authorization\n"
 			 "                              use SET SESSION AUTHORIZATION commands instead of\n"
@@ -7038,6 +7062,28 @@ collectComments(Archive *fout, CommentItem **items)
 static void
 dumpDumpableObject(Archive *fout, DumpableObject *dobj)
 {
+
+	int skip = 0;
+
+	switch (dobj->objType)
+	{
+		case DO_INDEX:
+		case DO_TRIGGER:
+		case DO_CONSTRAINT:
+		case DO_FK_CONSTRAINT:
+		case DO_RULE:
+			skip = !(dumpSections & DUMP_POST_DATA);
+			break;
+		case DO_TABLE_DATA:
+			skip = !(dumpSections & DUMP_DATA);
+			break;
+		default:
+			skip = !(dumpSections & DUMP_PRE_DATA);
+	}
+
+	if (skip)
+		return;
+   
 	switch (dobj->objType)
 	{
 		case DO_NAMESPACE:
@@ -14401,4 +14447,26 @@ check_sql_result(PGresult *res, PGconn *conn, const char *query,
 	write_msg(NULL, "Error message from server: %s", err);
 	write_msg(NULL, "The command was: %s\n", query);
 	exit_nicely();
+}
+
+static void set_section (const char *arg)
+{
+	/* if this is the first, clear all the bits */
+	if (dumpSections == DUMP_UNSECTIONED)
+		dumpSections = 0; 
+	
+	if (strcmp(arg,"pre-data") == 0)
+		dumpSections |= DUMP_PRE_DATA;
+	else if (strcmp(arg,"data") == 0)
+		dumpSections |= DUMP_DATA;
+	else if (strcmp(arg,"post-data") == 0)
+		dumpSections |= DUMP_POST_DATA;
+	else
+	{
+		fprintf(stderr, _("%s: unknown section name \"%s\")\n"),
+				progname, arg);
+		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
+				progname);
+		exit(1);
+	}
 }

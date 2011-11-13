@@ -69,6 +69,14 @@ typedef enum _teSection
 	SECTION_POST_DATA			/* stuff to be processed after data */
 } teSection;
 
+typedef enum 
+{
+	DUMP_PRE_DATA = 0x01,
+	DUMP_DATA = 0x02,
+	DUMP_POST_DATA = 0x04,
+	DUMP_UNSECTIONED = 0xff
+} DumpSections;
+
 /*
  *	We may want to have some more user-readable data, but in the mean
  *	time this gives us some abstraction and type checking.
