@@ -665,6 +665,7 @@ NewRestoreOptions(void)
 	/* set any fields that shouldn't default to zeroes */
 	opts->format = archUnknown;
 	opts->promptPassword = TRI_DEFAULT;
+	opts->dumpSections = DUMP_UNSECTIONED;
 
 	return opts;
 }
@@ -2163,6 +2164,7 @@ ReadToc(ArchiveHandle *AH)
 	int			depIdx;
 	int			depSize;
 	TocEntry   *te;
+	bool        in_post_data = false;
 
 	AH->tocCount = ReadInt(AH);
 	AH->maxDumpId = 0;
@@ -2227,6 +2229,12 @@ ReadToc(ArchiveHandle *AH)
 			else
 				te->section = SECTION_PRE_DATA;
 		}
+
+		/* will stay true even for SECTION_NONE items */
+		if (te->section == SECTION_POST_DATA)
+			in_post_data = true;
+		
+		te->inPostData = in_post_data;
 
 		te->defn = ReadStr(AH);
 		te->dropStmt = ReadStr(AH);

@@ -119,6 +119,7 @@ typedef struct _restoreOptions
 	int			dropSchema;
 	char	   *filename;
 	int			schemaOnly;
+	int         dumpSections;
 	int			verbose;
 	int			aclsSkip;
 	int			tocSummary;
