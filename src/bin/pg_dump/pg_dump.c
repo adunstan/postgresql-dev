@@ -14449,7 +14449,8 @@ check_sql_result(PGresult *res, PGconn *conn, const char *query,
 	exit_nicely();
 }
 
-static void set_section (const char *arg)
+static void 
+set_section (const char *arg)
 {
 	/* if this is the first, clear all the bits */
 	if (dumpSections == DUMP_UNSECTIONED)
