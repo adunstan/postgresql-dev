@@ -2385,6 +2385,17 @@ _tocEntryRequired(TocEntry *te, RestoreOptions *ropt, bool include_acls)
 	if (!ropt->createDB && strcmp(te->desc, "DATABASE") == 0)
 		return 0;
 
+	/* skip (all but) post data section as required */
+	/* table data is filtered if necessary lower down */
+	if (ropt->dumpSections != DUMP_UNSECTIONED)
+	{
+		if (!(ropt->dumpSections & DUMP_POST_DATA) && te->inPostData)
+			return 0;
+		if (!(ropt->dumpSections & DUMP_PRE_DATA) && ! te->inPostData && strcmp(te->desc, "TABLE DATA") != 0)
+			return 0;
+	}
+
+
 	/* Check options for selective dump/restore */
 	if (ropt->schemaNames)
 	{

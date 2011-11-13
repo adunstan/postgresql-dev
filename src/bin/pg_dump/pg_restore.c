@@ -61,6 +61,7 @@ extern int	optind;
 
 
 static void usage(const char *progname);
+static void set_section (int *dumpSections, const char *arg);
 
 typedef struct option optType;
 
@@ -116,6 +117,7 @@ main(int argc, char **argv)
 		{"no-data-for-failed-tables", no_argument, &no_data_for_failed_tables, 1},
 		{"no-tablespaces", no_argument, &outputNoTablespaces, 1},
 		{"role", required_argument, NULL, 2},
+		{"section", required_argument, NULL, 3},
 		{"use-set-session-authorization", no_argument, &use_setsessauth, 1},
 		{"no-security-labels", no_argument, &no_security_labels, 1},
 
@@ -270,6 +272,10 @@ main(int argc, char **argv)
 				opts->use_role = optarg;
 				break;
 
+			case 3:				/* section */
+				set_section(&(opts->dumpSections), optarg);
+				break;
+
 			default:
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
 				exit(1);
@@ -291,6 +297,33 @@ main(int argc, char **argv)
 				progname);
 		exit(1);
 	}
+
+	if (opts->dataOnly && opts->schemaOnly)
+	{
+		fprintf(stderr, _("%s: options -s/--schema-only and -a/--data-only cannot be used together\n"),
+			progname);
+		exit(1);
+	}
+
+	if ((opts->dataOnly || opts->schemaOnly) && (opts->dumpSections != DUMP_UNSECTIONED))
+	{
+		fprintf(stderr, _("%s: options -s/--schema-only and -a/--data-only cannot be used with --section\n"),
+			progname);
+		exit(1);
+	}
+	
+	if (opts->dataOnly)
+		opts->dumpSections = DUMP_DATA;
+	else if (opts->schemaOnly)
+		opts->dumpSections = DUMP_PRE_DATA | DUMP_POST_DATA;
+	else if ( opts->dumpSections != DUMP_UNSECTIONED)
+	{
+		opts->dataOnly = opts->dumpSections == DUMP_DATA;
+		opts->schemaOnly = !(opts->dumpSections & DUMP_DATA);
+	}
+
+
+	fprintf(stderr,"dumpsection: %d, dataOnly: %d, schemaOnly: %d\n", opts->dumpSections, opts->dataOnly, opts->schemaOnly);
 
 	/* Should get at most one of -d and -f, else user is confused */
 	if (opts->dbname)
@@ -432,6 +465,7 @@ usage(const char *progname)
 			 "                           created\n"));
 	printf(_("  --no-security-labels     do not restore security labels\n"));
 	printf(_("  --no-tablespaces         do not restore tablespace assignments\n"));
+	printf(_("  --section=SECTION        restore named section (pre-data, data or post-data)\n"));
 	printf(_("  --use-set-session-authorization\n"
 			 "                           use SET SESSION AUTHORIZATION commands instead of\n"
 	  "                           ALTER OWNER commands to set ownership\n"));
@@ -446,4 +480,27 @@ usage(const char *progname)
 
 	printf(_("\nIf no input file name is supplied, then standard input is used.\n\n"));
 	printf(_("Report bugs to <pgsql-bugs@postgresql.org>.\n"));
+}
+
+static void 
+set_section (int *dumpSections, const char *arg)
+{
+	/* if this is the first, clear all the bits */
+	if (*dumpSections == DUMP_UNSECTIONED)
+		*dumpSections = 0; 
+	
+	if (strcmp(arg,"pre-data") == 0)
+		*dumpSections |= DUMP_PRE_DATA;
+	else if (strcmp(arg,"data") == 0)
+		*dumpSections |= DUMP_DATA;
+	else if (strcmp(arg,"post-data") == 0)
+		*dumpSections |= DUMP_POST_DATA;
+	else
+	{
+		fprintf(stderr, _("%s: unknown section name \"%s\")\n"),
+				progname, arg);
+		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
+				progname);
+		exit(1);
+	}
 }
