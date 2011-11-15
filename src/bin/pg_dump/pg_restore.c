@@ -322,9 +322,6 @@ main(int argc, char **argv)
 		opts->schemaOnly = !(opts->dumpSections & DUMP_DATA);
 	}
 
-
-	fprintf(stderr,"dumpsection: %d, dataOnly: %d, schemaOnly: %d\n", opts->dumpSections, opts->dataOnly, opts->schemaOnly);
-
 	/* Should get at most one of -d and -f, else user is confused */
 	if (opts->dbname)
 	{
