@@ -81,9 +81,13 @@ struct Archive
 	int			minRemoteVersion;		/* allowable range */
 	int			maxRemoteVersion;
 
+	int			numWorkers;		/* number of parallel processes */
+	char	   *sync_snapshot_id;  /* sync snapshot id for parallel operation */
+
 	/* info needed for string escaping */
 	int			encoding;		/* libpq code for client_encoding */
 	bool		std_strings;	/* standard_conforming_strings */
+	char	   *use_role;		/* Issue SET ROLE to this */
 
 	/* error handling */
 	bool		exit_on_error;	/* whether to exit on SQL errors... */
@@ -141,7 +145,6 @@ typedef struct _restoreOptions
 	int			suppressDumpWarnings;	/* Suppress output of WARNING entries
 										 * to stderr */
 	bool		single_txn;
-	int			number_of_jobs;
 
 	bool	   *idWanted;		/* array showing which dump IDs to emit */
 } RestoreOptions;
@@ -194,6 +197,9 @@ extern Archive *CreateArchive(const char *FileSpec, const ArchiveFormat fmt,
 extern void PrintTOCSummary(Archive *AH, RestoreOptions *ropt);
 
 extern RestoreOptions *NewRestoreOptions(void);
+
+/* We have one in pg_dump.c and another one in pg_restore.c */
+extern void _SetupWorker(Archive *AHX, RestoreOptions *ropt);
 
 /* Rearrange and filter TOC entries */
 extern void SortTocFromFile(Archive *AHX, RestoreOptions *ropt);

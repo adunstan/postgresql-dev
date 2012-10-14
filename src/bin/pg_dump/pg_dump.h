@@ -259,6 +259,7 @@ typedef struct _tableInfo
 	/* these two are set only if table is a sequence owned by a column: */
 	Oid			owning_tab;		/* OID of table owning sequence */
 	int			owning_col;		/* attr # of column owning sequence */
+	int			relpages;
 
 	bool		interesting;	/* true if need to collect more data */
 
@@ -322,6 +323,7 @@ typedef struct _indxInfo
 	bool		indisclustered;
 	/* if there is an associated constraint object, its dumpId: */
 	DumpId		indexconstraint;
+	int			relpages;		/* relpages of the underlying table */
 } IndxInfo;
 
 typedef struct _ruleInfo
@@ -541,6 +543,7 @@ extern void sortDumpableObjects(DumpableObject **objs, int numObjs,
 					DumpId preBoundaryId, DumpId postBoundaryId);
 extern void sortDumpableObjectsByTypeName(DumpableObject **objs, int numObjs);
 extern void sortDumpableObjectsByTypeOid(DumpableObject **objs, int numObjs);
+extern void sortDataAndIndexObjectsBySize(DumpableObject **objs, int numObjs);
 
 /*
  * version specific routines

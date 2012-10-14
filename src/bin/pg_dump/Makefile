@@ -20,7 +20,8 @@ override CPPFLAGS := -I$(libpq_srcdir) $(CPPFLAGS)
 
 OBJS=	pg_backup_archiver.o pg_backup_db.o pg_backup_custom.o \
 	pg_backup_null.o pg_backup_tar.o \
-	pg_backup_directory.o dumpmem.o dumputils.o compress_io.o $(WIN32RES)
+	pg_backup_directory.o dumpmem.o dumputils.o compress_io.o \
+	parallel.o $(WIN32RES)
 
 KEYWRDOBJS = keywords.o kwlookup.o
 

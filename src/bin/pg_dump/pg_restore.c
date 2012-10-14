@@ -72,6 +72,7 @@ main(int argc, char **argv)
 	RestoreOptions *opts;
 	int			c;
 	int			exit_code;
+	int			numWorkers = 1;
 	Archive    *AH;
 	char	   *inputFileSpec;
 	static int	disable_triggers = 0;
@@ -183,7 +184,7 @@ main(int argc, char **argv)
 				break;
 
 			case 'j':			/* number of restore jobs */
-				opts->number_of_jobs = atoi(optarg);
+				numWorkers = atoi(optarg);
 				break;
 
 			case 'l':			/* Dump the TOC summary */
@@ -314,7 +315,7 @@ main(int argc, char **argv)
 	}
 
 	/* Can't do single-txn mode with multiple connections */
-	if (opts->single_txn && opts->number_of_jobs > 1)
+	if (opts->single_txn && numWorkers > 1)
 	{
 		fprintf(stderr, _("%s: cannot specify both --single-transaction and multiple jobs\n"),
 				progname);
@@ -373,6 +374,18 @@ main(int argc, char **argv)
 	if (opts->tocFile)
 		SortTocFromFile(AH, opts);
 
+	/* See comments in pg_dump.c */
+#ifdef WIN32
+	if (numWorkers > MAXIMUM_WAIT_OBJECTS)
+	{
+		fprintf(stderr, _("%s: maximum number of parallel jobs is %d\n"),
+				progname, MAXIMUM_WAIT_OBJECTS);
+		exit(1);
+	}
+#endif
+
+	AH->numWorkers = numWorkers;
+
 	if (opts->tocSummary)
 		PrintTOCSummary(AH, opts);
 	else
@@ -392,6 +405,13 @@ main(int argc, char **argv)
 	CloseArchive(AH);
 
 	return exit_code;
+}
+
+void
+_SetupWorker(Archive *AHX, RestoreOptions *ropt)
+{
+	ArchiveHandle *AH = (ArchiveHandle *) AHX;
+	(AH->ReopenPtr) (AH);
 }
 
 static void
