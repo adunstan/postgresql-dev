@@ -30,11 +30,29 @@
  * routines (e.g., open(2) and fopen(3)) themselves.  Otherwise, we
  * may find ourselves short of real file descriptors anyway.
  *
- * This file used to contain a bunch of stuff to support RAID levels 0
- * (jbod), 1 (duplex) and 5 (xor parity).  That stuff is all gone
- * because the parallel query processing code that called it is all
- * gone.  If you really need it you could get it from the original
- * POSTGRES source.
+ * INTERFACE ROUTINES
+ *
+ * PathNameOpenFile and OpenTemporaryFile are used to open virtual files.
+ * A File opened with OpenTemporaryFile is automatically deleted when the
+ * File is closed, either explicitly or implicitly at end of transaction or
+ * process exit. PathNameOpenFile is intended for files that are held open
+ * for a long time, like relation files. It is the caller's responsibility
+ * to close them, there is no automatic mechanism in fd.c for that.
+ *
+ * AllocateFile, AllocateDir and OpenTransientFile are wrappers around
+ * fopen(3), opendir(3), and open(2), respectively. They behave like the
+ * corresponding native functions, except that the handle is registered with
+ * the current subtransaction, and will be automatically closed at abort.
+ * These are intended for short operations like reading a configuration file.
+ * and there is a fixed limit on the number files that can be open using these
+ * functions at any one time.
+ *
+ * Finally, BasicOpenFile is a just thin wrapper around open() that can
+ * release file descriptors in use by the virtual file descriptors if
+ * necessary. There is no automatic cleanup of file descriptors returned by
+ * BasicOpenFile, it is solely the caller's responsibility to close the file
+ * descriptor by calling close(2).
+ *
  *-------------------------------------------------------------------------
  */
 
@@ -94,11 +112,11 @@ int			max_files_per_process = 1000;
 
 /*
  * Maximum number of file descriptors to open for either VFD entries or
- * AllocateFile/AllocateDir operations.  This is initialized to a conservative
- * value, and remains that way indefinitely in bootstrap or standalone-backend
- * cases.  In normal postmaster operation, the postmaster calls
- * set_max_safe_fds() late in initialization to update the value, and that
- * value is then inherited by forked subprocesses.
+ * AllocateFile/AllocateDir/OpenTransientFile operations.  This is initialized
+ * to a conservative value, and remains that way indefinitely in bootstrap or
+ * standalone-backend cases.  In normal postmaster operation, the postmaster
+ * calls set_max_safe_fds() late in initialization to update the value, and
+ * that value is then inherited by forked subprocesses.
  *
  * Note: the value of max_files_per_process is taken into account while
  * setting this variable, and so need not be tested separately.
@@ -126,8 +144,6 @@ int			max_safe_fds = 32;	/* default if not changed */
 /* these are the assigned bits in fdstate below: */
 #define FD_TEMPORARY		(1 << 0)	/* T = delete when closed */
 #define FD_XACT_TEMPORARY	(1 << 1)	/* T = delete at eoXact */
-#define FD_XACT_TRANSIENT	(1 << 2)	/* T = close (not delete) at aoXact,
-										 * but keep VFD */
 
 typedef struct vfd
 {
@@ -158,8 +174,11 @@ static Size SizeVfdCache = 0;
  */
 static int	nfile = 0;
 
-/* True if there are files to close/delete at end of transaction */
-static bool have_pending_fd_cleanup = false;
+/*
+ * Flag to tell whether it's worth scanning VfdCache looking for temp files
+ * to close
+ */
+static bool have_xact_temporary_files = false;
 
 /*
  * Tracks the total size of all temporary files.  Note: when temp_file_limit
@@ -170,10 +189,10 @@ static bool have_pending_fd_cleanup = false;
 static uint64 temporary_files_size = 0;
 
 /*
- * List of stdio FILEs and <dirent.h> DIRs opened with AllocateFile
- * and AllocateDir.
+ * List of OS handles opened with AllocateFile, AllocateDir and
+ * OpenTransientFile.
  *
- * Since we don't want to encourage heavy use of AllocateFile or AllocateDir,
+ * Since we don't want to encourage heavy use of those functions,
  * it seems OK to put a pretty small maximum limit on the number of
  * simultaneously allocated descs.
  */
@@ -182,7 +201,8 @@ static uint64 temporary_files_size = 0;
 typedef enum
 {
 	AllocateDescFile,
-	AllocateDescDir
+	AllocateDescDir,
+	AllocateDescRawFD
 } AllocateDescKind;
 
 typedef struct
@@ -192,6 +212,7 @@ typedef struct
 	{
 		FILE	   *file;
 		DIR		   *dir;
+		int			fd;
 	}			desc;
 	SubTransactionId create_subid;
 } AllocateDesc;
@@ -607,7 +628,6 @@ LruDelete(File file)
 	Vfd		   *vfdP;
 
 	Assert(file != 0);
-	Assert(!FileIsNotOpen(file));
 
 	DO_DB(elog(LOG, "LruDelete %d (%s)",
 			   file, VfdCache[file].fileName));
@@ -971,7 +991,7 @@ OpenTemporaryFile(bool interXact)
 		VfdCache[file].resowner = CurrentResourceOwner;
 
 		/* ensure cleanup happens at eoxact */
-		have_pending_fd_cleanup = true;
+		have_xact_temporary_files = true;
 	}
 
 	return file;
@@ -1042,25 +1062,6 @@ OpenTemporaryFileInTablespace(Oid tblspcOid, bool rejectError)
 	}
 
 	return file;
-}
-
-/*
- * Set the transient flag on a file
- *
- * This flag tells CleanupTempFiles to close the kernel-level file descriptor
- * (but not the VFD itself) at end of transaction.
- */
-void
-FileSetTransient(File file)
-{
-	Vfd		   *vfdP;
-
-	Assert(FileIsValid(file));
-
-	vfdP = &VfdCache[file];
-	vfdP->fdstate |= FD_XACT_TRANSIENT;
-
-	have_pending_fd_cleanup = true;
 }
 
 /*
@@ -1542,8 +1543,49 @@ TryAgain:
 	return NULL;
 }
 
+
 /*
- * Free an AllocateDesc of either type.
+ * Like AllocateFile, but returns an unbuffered fd like open(2)
+ */
+int
+OpenTransientFile(FileName fileName, int fileFlags, int fileMode)
+{
+	int			fd;
+
+
+	DO_DB(elog(LOG, "OpenTransientFile: Allocated %d (%s)",
+			   numAllocatedDescs, fileName));
+
+	/*
+	 * The test against MAX_ALLOCATED_DESCS prevents us from overflowing
+	 * allocatedFiles[]; the test against max_safe_fds prevents BasicOpenFile
+	 * from hogging every one of the available FDs, which'd lead to infinite
+	 * looping.
+	 */
+	if (numAllocatedDescs >= MAX_ALLOCATED_DESCS ||
+		numAllocatedDescs >= max_safe_fds - 1)
+		elog(ERROR, "exceeded MAX_ALLOCATED_DESCS while trying to open file \"%s\"",
+			 fileName);
+
+	fd = BasicOpenFile(fileName, fileFlags, fileMode);
+
+	if (fd >= 0)
+	{
+		AllocateDesc *desc = &allocatedDescs[numAllocatedDescs];
+
+		desc->kind = AllocateDescRawFD;
+		desc->desc.fd = fd;
+		desc->create_subid = GetCurrentSubTransactionId();
+		numAllocatedDescs++;
+
+		return fd;
+	}
+
+	return -1;					/* failure */
+}
+
+/*
+ * Free an AllocateDesc of any type.
  *
  * The argument *must* point into the allocatedDescs[] array.
  */
@@ -1560,6 +1602,9 @@ FreeDesc(AllocateDesc *desc)
 			break;
 		case AllocateDescDir:
 			result = closedir(desc->desc.dir);
+			break;
+		case AllocateDescRawFD:
+			result = close(desc->desc.fd);
 			break;
 		default:
 			elog(ERROR, "AllocateDesc kind not recognized");
@@ -1602,6 +1647,33 @@ FreeFile(FILE *file)
 	return fclose(file);
 }
 
+/*
+ * Close a file returned by OpenTransientFile.
+ *
+ * Note we do not check close's return value --- it is up to the caller
+ * to handle close errors.
+ */
+int
+CloseTransientFile(int fd)
+{
+	int			i;
+
+	DO_DB(elog(LOG, "CloseTransientFile: Allocated %d", numAllocatedDescs));
+
+	/* Remove fd from list of allocated files, if it's present */
+	for (i = numAllocatedDescs; --i >= 0;)
+	{
+		AllocateDesc *desc = &allocatedDescs[i];
+
+		if (desc->kind == AllocateDescRawFD && desc->desc.fd == fd)
+			return FreeDesc(desc);
+	}
+
+	/* Only get here if someone passes us a file not in allocatedDescs */
+	elog(WARNING, "fd passed to CloseTransientFile was not obtained from OpenTransientFile");
+
+	return close(fd);
+}
 
 /*
  * Routines that want to use <dirent.h> (ie, DIR*) should use AllocateDir
@@ -1863,9 +1935,8 @@ AtEOSubXact_Files(bool isCommit, SubTransactionId mySubid,
  * particularly care which).  All still-open per-transaction temporary file
  * VFDs are closed, which also causes the underlying files to be deleted
  * (although they should've been closed already by the ResourceOwner
- * cleanup). Transient files have their kernel file descriptors closed.
- * Furthermore, all "allocated" stdio files are closed. We also forget any
- * transaction-local temp tablespace list.
+ * cleanup). Furthermore, all "allocated" stdio files are closed. We also
+ * forget any transaction-local temp tablespace list.
  */
 void
 AtEOXact_Files(void)
@@ -1888,16 +1959,13 @@ AtProcExit_Files(int code, Datum arg)
 }
 
 /*
- * General cleanup routine for fd.c.
- *
- * Temporary files are closed, and their underlying files deleted.
- * Transient files are closed.
+ * Close temporary files and delete their underlying files.
  *
  * isProcExit: if true, this is being called as the backend process is
  * exiting. If that's the case, we should remove all temporary files; if
  * that's not the case, we are being called for transaction commit/abort
  * and should only remove transaction-local temp files.  In either case,
- * also clean up "allocated" stdio files and dirs.
+ * also clean up "allocated" stdio files, dirs and fds.
  */
 static void
 CleanupTempFiles(bool isProcExit)
@@ -1908,54 +1976,38 @@ CleanupTempFiles(bool isProcExit)
 	 * Careful here: at proc_exit we need extra cleanup, not just
 	 * xact_temporary files.
 	 */
-	if (isProcExit || have_pending_fd_cleanup)
+	if (isProcExit || have_xact_temporary_files)
 	{
 		Assert(FileIsNotOpen(0));		/* Make sure ring not corrupted */
 		for (i = 1; i < SizeVfdCache; i++)
 		{
 			unsigned short fdstate = VfdCache[i].fdstate;
 
-			if (VfdCache[i].fileName != NULL)
+			if ((fdstate & FD_TEMPORARY) && VfdCache[i].fileName != NULL)
 			{
-				if (fdstate & FD_TEMPORARY)
+				/*
+				 * If we're in the process of exiting a backend process, close
+				 * all temporary files. Otherwise, only close temporary files
+				 * local to the current transaction. They should be closed by
+				 * the ResourceOwner mechanism already, so this is just a
+				 * debugging cross-check.
+				 */
+				if (isProcExit)
+					FileClose(i);
+				else if (fdstate & FD_XACT_TEMPORARY)
 				{
-					/*
-					 * If we're in the process of exiting a backend process,
-					 * close all temporary files. Otherwise, only close
-					 * temporary files local to the current transaction. They
-					 * should be closed by the ResourceOwner mechanism
-					 * already, so this is just a debugging cross-check.
-					 */
-					if (isProcExit)
-						FileClose(i);
-					else if (fdstate & FD_XACT_TEMPORARY)
-					{
-						elog(WARNING,
-						"temporary file %s not closed at end-of-transaction",
-							 VfdCache[i].fileName);
-						FileClose(i);
-					}
-				}
-				else if (fdstate & FD_XACT_TRANSIENT)
-				{
-					/*
-					 * Close the FD, and remove the entry from the LRU ring,
-					 * but also remove the flag from the VFD.  This is to
-					 * ensure that if the VFD is reused in the future for
-					 * non-transient access, we don't close it inappropriately
-					 * then.
-					 */
-					if (!FileIsNotOpen(i))
-						LruDelete(i);
-					VfdCache[i].fdstate &= ~FD_XACT_TRANSIENT;
+					elog(WARNING,
+						 "temporary file %s not closed at end-of-transaction",
+						 VfdCache[i].fileName);
+					FileClose(i);
 				}
 			}
 		}
 
-		have_pending_fd_cleanup = false;
+		have_xact_temporary_files = false;
 	}
 
-	/* Clean up "allocated" stdio files and dirs. */
+	/* Clean up "allocated" stdio files, dirs and fds. */
 	while (numAllocatedDescs > 0)
 		FreeDesc(&allocatedDescs[0]);
 }

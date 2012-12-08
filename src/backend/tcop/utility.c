@@ -972,14 +972,7 @@ standard_ProcessUtility(Node *parsetree,
 		case T_AlterEnumStmt:	/* ALTER TYPE (enum) */
 			if (isCompleteQuery)
 				EventTriggerDDLCommandStart(parsetree);
-
-			/*
-			 * We disallow this in transaction blocks, because we can't cope
-			 * with enum OID values getting into indexes and then having their
-			 * defining pg_enum entries go away.
-			 */
-			PreventTransactionChain(isTopLevel, "ALTER TYPE ... ADD");
-			AlterEnum((AlterEnumStmt *) parsetree);
+			AlterEnum((AlterEnumStmt *) parsetree, isTopLevel);
 			break;
 
 		case T_ViewStmt:		/* CREATE VIEW */
@@ -1508,16 +1501,11 @@ UtilityContainsQuery(Node *parsetree)
 			return qry;
 
 		case T_CreateTableAsStmt:
-			/* might or might not contain a Query ... */
 			qry = (Query *) ((CreateTableAsStmt *) parsetree)->query;
-			if (IsA(qry, Query))
-			{
-				/* Recursion currently can't be necessary here */
-				Assert(qry->commandType != CMD_UTILITY);
-				return qry;
-			}
-			Assert(IsA(qry, ExecuteStmt));
-			return NULL;
+			Assert(IsA(qry, Query));
+			if (qry->commandType == CMD_UTILITY)
+				return UtilityContainsQuery(qry->utilityStmt);
+			return qry;
 
 		default:
 			return NULL;

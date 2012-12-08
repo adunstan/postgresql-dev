@@ -318,7 +318,7 @@ MarkAsPreparing(TransactionId xid, const char *gid,
 	proc->lxid = (LocalTransactionId) xid;
 	pgxact->xid = xid;
 	pgxact->xmin = InvalidTransactionId;
-	pgxact->inCommit = false;
+	pgxact->delayChkpt = false;
 	pgxact->vacuumFlags = 0;
 	proc->pid = 0;
 	proc->backendId = InvalidBackendId;
@@ -970,17 +970,12 @@ EndPrepare(GlobalTransaction gxact)
 
 	/*
 	 * Create the 2PC state file.
-	 *
-	 * Note: because we use BasicOpenFile(), we are responsible for ensuring
-	 * the FD gets closed in any error exit path.  Once we get into the
-	 * critical section, though, it doesn't matter since any failure causes
-	 * PANIC anyway.
 	 */
 	TwoPhaseFilePath(path, xid);
 
-	fd = BasicOpenFile(path,
-					   O_CREAT | O_EXCL | O_WRONLY | PG_BINARY,
-					   S_IRUSR | S_IWUSR);
+	fd = OpenTransientFile(path,
+						   O_CREAT | O_EXCL | O_WRONLY | PG_BINARY,
+						   S_IRUSR | S_IWUSR);
 	if (fd < 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
@@ -995,7 +990,7 @@ EndPrepare(GlobalTransaction gxact)
 		COMP_CRC32(statefile_crc, record->data, record->len);
 		if ((write(fd, record->data, record->len)) != record->len)
 		{
-			close(fd);
+			CloseTransientFile(fd);
 			ereport(ERROR,
 					(errcode_for_file_access(),
 					 errmsg("could not write two-phase state file: %m")));
@@ -1012,7 +1007,7 @@ EndPrepare(GlobalTransaction gxact)
 
 	if ((write(fd, &bogus_crc, sizeof(pg_crc32))) != sizeof(pg_crc32))
 	{
-		close(fd);
+		CloseTransientFile(fd);
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not write two-phase state file: %m")));
@@ -1021,7 +1016,7 @@ EndPrepare(GlobalTransaction gxact)
 	/* Back up to prepare for rewriting the CRC */
 	if (lseek(fd, -((off_t) sizeof(pg_crc32)), SEEK_CUR) < 0)
 	{
-		close(fd);
+		CloseTransientFile(fd);
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not seek in two-phase state file: %m")));
@@ -1039,18 +1034,18 @@ EndPrepare(GlobalTransaction gxact)
 	 * odds of a PANIC actually occurring should be very tiny given that we
 	 * were able to write the bogus CRC above.
 	 *
-	 * We have to set inCommit here, too; otherwise a checkpoint starting
+	 * We have to set delayChkpt here, too; otherwise a checkpoint starting
 	 * immediately after the WAL record is inserted could complete without
 	 * fsync'ing our state file.  (This is essentially the same kind of race
 	 * condition as the COMMIT-to-clog-write case that RecordTransactionCommit
-	 * uses inCommit for; see notes there.)
+	 * uses delayChkpt for; see notes there.)
 	 *
 	 * We save the PREPARE record's location in the gxact for later use by
 	 * CheckPointTwoPhase.
 	 */
 	START_CRIT_SECTION();
 
-	MyPgXact->inCommit = true;
+	MyPgXact->delayChkpt = true;
 
 	gxact->prepare_lsn = XLogInsert(RM_XACT_ID, XLOG_XACT_PREPARE,
 									records.head);
@@ -1061,13 +1056,13 @@ EndPrepare(GlobalTransaction gxact)
 	/* write correct CRC and close file */
 	if ((write(fd, &statefile_crc, sizeof(pg_crc32))) != sizeof(pg_crc32))
 	{
-		close(fd);
+		CloseTransientFile(fd);
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not write two-phase state file: %m")));
 	}
 
-	if (close(fd) != 0)
+	if (CloseTransientFile(fd) != 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not close two-phase state file: %m")));
@@ -1091,7 +1086,7 @@ EndPrepare(GlobalTransaction gxact)
 	 * checkpoint starting after this will certainly see the gxact as a
 	 * candidate for fsyncing.
 	 */
-	MyPgXact->inCommit = false;
+	MyPgXact->delayChkpt = false;
 
 	END_CRIT_SECTION();
 
@@ -1144,7 +1139,7 @@ ReadTwoPhaseFile(TransactionId xid, bool give_warnings)
 
 	TwoPhaseFilePath(path, xid);
 
-	fd = BasicOpenFile(path, O_RDONLY | PG_BINARY, 0);
+	fd = OpenTransientFile(path, O_RDONLY | PG_BINARY, 0);
 	if (fd < 0)
 	{
 		if (give_warnings)
@@ -1163,7 +1158,7 @@ ReadTwoPhaseFile(TransactionId xid, bool give_warnings)
 	 */
 	if (fstat(fd, &stat))
 	{
-		close(fd);
+		CloseTransientFile(fd);
 		if (give_warnings)
 			ereport(WARNING,
 					(errcode_for_file_access(),
@@ -1177,14 +1172,14 @@ ReadTwoPhaseFile(TransactionId xid, bool give_warnings)
 						sizeof(pg_crc32)) ||
 		stat.st_size > MaxAllocSize)
 	{
-		close(fd);
+		CloseTransientFile(fd);
 		return NULL;
 	}
 
 	crc_offset = stat.st_size - sizeof(pg_crc32);
 	if (crc_offset != MAXALIGN(crc_offset))
 	{
-		close(fd);
+		CloseTransientFile(fd);
 		return NULL;
 	}
 
@@ -1195,7 +1190,7 @@ ReadTwoPhaseFile(TransactionId xid, bool give_warnings)
 
 	if (read(fd, buf, stat.st_size) != stat.st_size)
 	{
-		close(fd);
+		CloseTransientFile(fd);
 		if (give_warnings)
 			ereport(WARNING,
 					(errcode_for_file_access(),
@@ -1205,7 +1200,7 @@ ReadTwoPhaseFile(TransactionId xid, bool give_warnings)
 		return NULL;
 	}
 
-	close(fd);
+	CloseTransientFile(fd);
 
 	hdr = (TwoPhaseFileHeader *) buf;
 	if (hdr->magic != TWOPHASE_MAGIC || hdr->total_len != stat.st_size)
@@ -1469,9 +1464,9 @@ RecreateTwoPhaseFile(TransactionId xid, void *content, int len)
 
 	TwoPhaseFilePath(path, xid);
 
-	fd = BasicOpenFile(path,
-					   O_CREAT | O_TRUNC | O_WRONLY | PG_BINARY,
-					   S_IRUSR | S_IWUSR);
+	fd = OpenTransientFile(path,
+						   O_CREAT | O_TRUNC | O_WRONLY | PG_BINARY,
+						   S_IRUSR | S_IWUSR);
 	if (fd < 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
@@ -1481,14 +1476,14 @@ RecreateTwoPhaseFile(TransactionId xid, void *content, int len)
 	/* Write content and CRC */
 	if (write(fd, content, len) != len)
 	{
-		close(fd);
+		CloseTransientFile(fd);
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not write two-phase state file: %m")));
 	}
 	if (write(fd, &statefile_crc, sizeof(pg_crc32)) != sizeof(pg_crc32))
 	{
-		close(fd);
+		CloseTransientFile(fd);
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not write two-phase state file: %m")));
@@ -1500,13 +1495,13 @@ RecreateTwoPhaseFile(TransactionId xid, void *content, int len)
 	 */
 	if (pg_fsync(fd) != 0)
 	{
-		close(fd);
+		CloseTransientFile(fd);
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not fsync two-phase state file: %m")));
 	}
 
-	if (close(fd) != 0)
+	if (CloseTransientFile(fd) != 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not close two-phase state file: %m")));
@@ -1577,7 +1572,7 @@ CheckPointTwoPhase(XLogRecPtr redo_horizon)
 
 		TwoPhaseFilePath(path, xid);
 
-		fd = BasicOpenFile(path, O_RDWR | PG_BINARY, 0);
+		fd = OpenTransientFile(path, O_RDWR | PG_BINARY, 0);
 		if (fd < 0)
 		{
 			if (errno == ENOENT)
@@ -1596,14 +1591,14 @@ CheckPointTwoPhase(XLogRecPtr redo_horizon)
 
 		if (pg_fsync(fd) != 0)
 		{
-			close(fd);
+			CloseTransientFile(fd);
 			ereport(ERROR,
 					(errcode_for_file_access(),
 					 errmsg("could not fsync two-phase state file \"%s\": %m",
 							path)));
 		}
 
-		if (close(fd) != 0)
+		if (CloseTransientFile(fd) != 0)
 			ereport(ERROR,
 					(errcode_for_file_access(),
 					 errmsg("could not close two-phase state file \"%s\": %m",
@@ -1977,7 +1972,7 @@ RecoverPreparedTransactions(void)
  *	RecordTransactionCommitPrepared
  *
  * This is basically the same as RecordTransactionCommit: in particular,
- * we must set the inCommit flag to avoid a race condition.
+ * we must set the delayChkpt flag to avoid a race condition.
  *
  * We know the transaction made at least one XLOG entry (its PREPARE),
  * so it is never possible to optimize out the commit record.
@@ -2000,7 +1995,7 @@ RecordTransactionCommitPrepared(TransactionId xid,
 	START_CRIT_SECTION();
 
 	/* See notes in RecordTransactionCommit */
-	MyPgXact->inCommit = true;
+	MyPgXact->delayChkpt = true;
 
 	/* Emit the XLOG commit record */
 	xlrec.xid = xid;
@@ -2058,7 +2053,7 @@ RecordTransactionCommitPrepared(TransactionId xid,
 	TransactionIdCommitTree(xid, nchildren, children);
 
 	/* Checkpoint can proceed now */
-	MyPgXact->inCommit = false;
+	MyPgXact->delayChkpt = false;
 
 	END_CRIT_SECTION();
 

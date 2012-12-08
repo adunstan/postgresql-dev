@@ -675,8 +675,9 @@ include 'filename'
         an otherwise idle connection.  A value of 0 uses the system default.
         This parameter is supported only on systems that support the
         <symbol>TCP_KEEPIDLE</> or <symbol>TCP_KEEPALIVE</> symbols, and on
-        Windows; on other systems, it must be zero. This parameter is ignored
-        for connections made via a Unix-domain socket.
+        Windows; on other systems, it must be zero.
+        In sessions connected via a Unix-domain socket, this parameter is
+        ignored and always reads as zero.
        </para>
        <note>
         <para>
@@ -698,8 +699,9 @@ include 'filename'
         otherwise idle connection.  A value of 0 uses the system default.
         This parameter is supported only on systems that support the
         <symbol>TCP_KEEPINTVL</> symbol, and on Windows; on other systems, it
-        must be zero. This parameter is ignored for connections made via a
-        Unix-domain socket.
+        must be zero.
+        In sessions connected via a Unix-domain socket, this parameter is
+        ignored and always reads as zero.
        </para>
        <note>
         <para>
@@ -720,8 +722,9 @@ include 'filename'
         Specifies the number of keepalive packets to send on an otherwise idle
         connection.  A value of 0 uses the system default.  This parameter is
         supported only on systems that support the <symbol>TCP_KEEPCNT</>
-        symbol; on other systems, it must be zero. This parameter is ignored
-        for connections made via a Unix-domain socket.
+        symbol; on other systems, it must be zero.
+        In sessions connected via a Unix-domain socket, this parameter is
+        ignored and always reads as zero.
        </para>
        <note>
         <para>
@@ -1691,6 +1694,15 @@ include 'filename'
         gets recreated frequently and is not used for failover.  High
         quality hardware alone is not a sufficient justification for
         turning off <varname>fsync</varname>.
+       </para>
+
+       <para>
+        For reliable recovery when changing <varname>fsync</varname>
+        off to on, it is necessary to force all modified buffers in the
+        kernel to durable storage.  This can be done while the cluster
+        is shutdown or while fsync is on by running <command>initdb
+        --sync-only</command>, running <command>sync</>, unmounting the
+        file system, or rebooting the server.
        </para>
 
        <para>
@@ -4807,7 +4819,7 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
         Likewise, the current session's temporary-table schema,
         <literal>pg_temp_<replaceable>nnn</></>, is always searched if it
         exists.  It can be explicitly listed in the path by using the
-        alias <literal>pg_temp</>.  If it is not listed in the path then
+        alias <literal>pg_temp</><indexterm><primary>pg_temp</></>.  If it is not listed in the path then
         it is searched first (even before <literal>pg_catalog</>).  However,
         the temporary schema is only searched for relation (table, view,
         sequence, etc) and data type names.  It is never searched for

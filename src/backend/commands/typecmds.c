@@ -1169,7 +1169,7 @@ DefineEnum(CreateEnumStmt *stmt)
  *		Adds a new label to an existing enum.
  */
 void
-AlterEnum(AlterEnumStmt *stmt)
+AlterEnum(AlterEnumStmt *stmt, bool isTopLevel)
 {
 	Oid			enum_type_oid;
 	TypeName   *typename;
@@ -1183,12 +1183,31 @@ AlterEnum(AlterEnumStmt *stmt)
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for type %u", enum_type_oid);
 
+	/*
+	 * Ordinarily we disallow adding values within transaction blocks, because
+	 * we can't cope with enum OID values getting into indexes and then having
+	 * their defining pg_enum entries go away.  However, it's okay if the enum
+	 * type was created in the current transaction, since then there can be
+	 * no such indexes that wouldn't themselves go away on rollback.  (We
+	 * support this case because pg_dump --binary-upgrade needs it.)  We test
+	 * this by seeing if the pg_type row has xmin == current XID and is not
+	 * HEAP_UPDATED.  If it is HEAP_UPDATED, we can't be sure whether the
+	 * type was created or only modified in this xact.  So we are disallowing
+	 * some cases that could theoretically be safe; but fortunately pg_dump
+	 * only needs the simplest case.
+	 */
+	if (HeapTupleHeaderGetXmin(tup->t_data) == GetCurrentTransactionId() &&
+		!(tup->t_data->t_infomask & HEAP_UPDATED))
+		/* safe to do inside transaction block */ ;
+	else
+		PreventTransactionChain(isTopLevel, "ALTER TYPE ... ADD");
+
 	/* Check it's an enum and check user has permission to ALTER the enum */
 	checkEnumOwner(tup);
 
 	/* Add the new label */
 	AddEnumLabel(enum_type_oid, stmt->newVal,
-				 stmt->newValNeighbor, stmt->newValIsAfter, 
+				 stmt->newValNeighbor, stmt->newValIsAfter,
 				 stmt->skipIfExists);
 
 	ReleaseSysCache(tup);
@@ -3322,6 +3341,7 @@ AlterTypeNamespace(List *names, const char *newschema, ObjectType objecttype)
 	TypeName   *typename;
 	Oid			typeOid;
 	Oid			nspOid;
+	ObjectAddresses	*objsMoved;
 
 	/* Make a TypeName so we can use standard type lookup machinery */
 	typename = makeTypeNameFromNameList(names);
@@ -3337,11 +3357,13 @@ AlterTypeNamespace(List *names, const char *newschema, ObjectType objecttype)
 	/* get schema OID and check its permissions */
 	nspOid = LookupCreationNamespace(newschema);
 
-	AlterTypeNamespace_oid(typeOid, nspOid);
+	objsMoved = new_object_addresses();
+	AlterTypeNamespace_oid(typeOid, nspOid, objsMoved);
+	free_object_addresses(objsMoved);
 }
 
 Oid
-AlterTypeNamespace_oid(Oid typeOid, Oid nspOid)
+AlterTypeNamespace_oid(Oid typeOid, Oid nspOid, ObjectAddresses *objsMoved)
 {
 	Oid			elemOid;
 
@@ -3360,7 +3382,7 @@ AlterTypeNamespace_oid(Oid typeOid, Oid nspOid)
 						 format_type_be(elemOid))));
 
 	/* and do the work */
-	return AlterTypeNamespaceInternal(typeOid, nspOid, false, true);
+	return AlterTypeNamespaceInternal(typeOid, nspOid, false, true, objsMoved);
 }
 
 /*
@@ -3381,7 +3403,8 @@ AlterTypeNamespace_oid(Oid typeOid, Oid nspOid)
 Oid
 AlterTypeNamespaceInternal(Oid typeOid, Oid nspOid,
 						   bool isImplicitArray,
-						   bool errorOnTableType)
+						   bool errorOnTableType,
+						   ObjectAddresses *objsMoved)
 {
 	Relation	rel;
 	HeapTuple	tup;
@@ -3389,6 +3412,17 @@ AlterTypeNamespaceInternal(Oid typeOid, Oid nspOid,
 	Oid			oldNspOid;
 	Oid			arrayOid;
 	bool		isCompositeType;
+	ObjectAddress thisobj;
+
+	/*
+	 * Make sure we haven't moved this object previously.
+	 */
+	thisobj.classId = TypeRelationId;
+	thisobj.objectId = typeOid;
+	thisobj.objectSubId = 0;
+
+	if (object_address_present(&thisobj, objsMoved))
+		return InvalidOid;
 
 	rel = heap_open(TypeRelationId, RowExclusiveLock);
 
@@ -3449,7 +3483,7 @@ AlterTypeNamespaceInternal(Oid typeOid, Oid nspOid,
 
 		AlterRelationNamespaceInternal(classRel, typform->typrelid,
 									   oldNspOid, nspOid,
-									   false);
+									   false, objsMoved);
 
 		heap_close(classRel, RowExclusiveLock);
 
@@ -3458,13 +3492,14 @@ AlterTypeNamespaceInternal(Oid typeOid, Oid nspOid,
 		 * currently support this, but probably will someday).
 		 */
 		AlterConstraintNamespaces(typform->typrelid, oldNspOid,
-								  nspOid, false);
+								  nspOid, false, objsMoved);
 	}
 	else
 	{
 		/* If it's a domain, it might have constraints */
 		if (typform->typtype == TYPTYPE_DOMAIN)
-			AlterConstraintNamespaces(typeOid, oldNspOid, nspOid, true);
+			AlterConstraintNamespaces(typeOid, oldNspOid, nspOid, true,
+									  objsMoved);
 	}
 
 	/*
@@ -3482,9 +3517,11 @@ AlterTypeNamespaceInternal(Oid typeOid, Oid nspOid,
 
 	heap_close(rel, RowExclusiveLock);
 
+	add_exact_object_address(&thisobj, objsMoved);
+
 	/* Recursively alter the associated array type, if any */
 	if (OidIsValid(arrayOid))
-		AlterTypeNamespaceInternal(arrayOid, nspOid, true, true);
+		AlterTypeNamespaceInternal(arrayOid, nspOid, true, true, objsMoved);
 
 	return oldNspOid;
 }

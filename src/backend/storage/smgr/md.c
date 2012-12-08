@@ -300,9 +300,6 @@ mdcreate(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
 
 	pfree(path);
 
-	if (reln->smgr_transient)
-		FileSetTransient(fd);
-
 	reln->md_fd[forkNum] = _fdvec_alloc();
 
 	reln->md_fd[forkNum]->mdfd_vfd = fd;
@@ -404,14 +401,14 @@ mdunlinkfork(RelFileNodeBackend rnode, ForkNumber forkNum, bool isRedo)
 		/* truncate(2) would be easier here, but Windows hasn't got it */
 		int			fd;
 
-		fd = BasicOpenFile(path, O_RDWR | PG_BINARY, 0);
+		fd = OpenTransientFile(path, O_RDWR | PG_BINARY, 0);
 		if (fd >= 0)
 		{
 			int			save_errno;
 
 			ret = ftruncate(fd, 0);
 			save_errno = errno;
-			close(fd);
+			CloseTransientFile(fd);
 			errno = save_errno;
 		}
 		else
@@ -584,9 +581,6 @@ mdopen(SMgrRelation reln, ForkNumber forknum, ExtensionBehavior behavior)
 	}
 
 	pfree(path);
-
-	if (reln->smgr_transient)
-		FileSetTransient(fd);
 
 	reln->md_fd[forknum] = mdfd = _fdvec_alloc();
 
@@ -1679,9 +1673,6 @@ _mdfd_openseg(SMgrRelation reln, ForkNumber forknum, BlockNumber segno,
 
 	if (fd < 0)
 		return NULL;
-
-	if (reln->smgr_transient)
-		FileSetTransient(fd);
 
 	/* allocate an mdfdvec entry for it */
 	v = _fdvec_alloc();
